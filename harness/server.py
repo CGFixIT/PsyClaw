@@ -1280,7 +1280,7 @@ def create_app(
             loop_inflight.pop(session_id, None)
 
     def _guard_loop_turn(req: ChatRequest, session, request: Request) -> None:
-        if not req.session_id:  # pragma: no cover -- chat() rejects missing session_id before calling this
+        if not req.session_id:
             raise _err(
                 _HTTP_BAD_REQUEST,
                 AgenticError(

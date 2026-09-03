@@ -263,7 +263,24 @@ def test_governed_skill_files_rejects_blank_fields() -> None:
         governed_skill_files(BadRegistry())  # type: ignore[arg-type]
 
 
-def test_load_create_deep_agent_and_runtime_model_fail_closed_without_extra() -> None:
+def test_load_create_deep_agent_and_runtime_model_fail_closed_without_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail closed even when the deepagents extra is installed (CI harness job)."""
+    import builtins
+    import sys
+
+    for key in [k for k in sys.modules if k == "deepagents" or k.startswith("deepagents.")]:
+        monkeypatch.delitem(sys.modules, key, raising=False)
+
+    real_import = builtins.__import__
+
+    def _import(name, g=None, loc=None, fromlist=(), level=0):
+        if name == "deepagents" or name.startswith("deepagents."):
+            raise ImportError("No module named 'deepagents'")
+        return real_import(name, g, loc, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
     with pytest.raises(AgenticError, match="deepagents dependency is not installed"):
         _load_create_deep_agent()
     with pytest.raises(AgenticError, match="runtime dependencies are not installed"):

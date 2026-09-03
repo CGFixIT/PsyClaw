@@ -176,7 +176,7 @@ def parse_allow_entry(raw: str) -> dict[str, str]:
     if ip is not None and not ip.is_global:
         raise WebToolError("private or loopback IPs cannot be allowlisted", code="WEB_SSRF_DENIED")
     path = parsed.path or "/"
-    if not path.startswith("/"):  # pragma: no cover -- urlparse http(s)+host path is "" or /-prefixed
+    if not path.startswith("/"):
         path = f"/{path}"
     return {
         "scheme": parsed.scheme,

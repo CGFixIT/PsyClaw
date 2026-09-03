@@ -600,8 +600,17 @@ def test_contains_file_not_found_falls_back_to_parent(tmp_path: Path) -> None:
 
 
 def test_contains_write_target_raises_at_filesystem_root(tmp_path: Path) -> None:
+    # Walked-to-root FileNotFoundError is not "Z:" (POSIX treats that as cwd).
+    class _MissingRoot:
+        def resolve(self, strict: bool = False) -> Path:
+            raise FileNotFoundError("missing")
+
+        @property
+        def parent(self) -> _MissingRoot:
+            return self
+
     with pytest.raises(FileNotFoundError):
-        _contains_write_target(tmp_path, Path("Z:/no/such/deep/nested/file.txt"))
+        _contains_write_target(tmp_path, _MissingRoot())  # type: ignore[arg-type]
 
 
 def test_workspace_read_denies_when_contains_reports_escape(

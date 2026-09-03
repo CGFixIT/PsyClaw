@@ -1056,7 +1056,8 @@ def test_windows_remove_returncode_one_without_not_found_is_false() -> None:
         ),
         patch("sync.scheduler.platform.system", return_value="Windows"),
     ):
-        assert WindowsTaskScheduler(cfg).remove() is False
+        removed = WindowsTaskScheduler(cfg).remove()
+        assert removed is False
 
 def test_launchd_calendar_and_human_schedule() -> None:
     from sync.scheduler import _launchd_calendar_interval, _launchd_human_schedule
@@ -1101,9 +1102,11 @@ def test_launchd_scheduler_install_remove_status(tmp_path: Path, monkeypatch) ->
     status = sched.status()
     assert status is not None
     assert status.note == "loaded"
-    assert sched.remove() is True
+    removed = sched.remove()
+    assert removed is True
     assert not plist.exists()
-    assert sched.remove() is False
+    removed_again = sched.remove()
+    assert removed_again is False
 
 
 def test_posix_launcher_path_uses_log_dir_or_repo(tmp_path: Path, monkeypatch) -> None:
@@ -1180,5 +1183,6 @@ def test_launchd_remove_tolerates_bootout_oserror(tmp_path: Path, monkeypatch) -
         "sync.scheduler.subprocess.run",
         MagicMock(side_effect=OSError("bootout wedged")),
     )
-    assert sched.remove() is True
+    removed = sched.remove()
+    assert removed is True
     assert not plist.exists()

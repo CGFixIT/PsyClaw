@@ -308,6 +308,7 @@ def test_forbidden_map_covers_every_event_type() -> None:
     from utils import numbat_emitter as ne
 
     assert set(ne._EVENT_TYPE_FORBIDDEN_FIELDS) == ne._EVENT_TYPES
+    assert set(ne._EVENT_TYPE_ALLOWED_ACTION_FIELDS) == ne._EVENT_TYPES
     exec_forbidden = ne._EVENT_TYPE_FORBIDDEN_FIELDS["command.exec"]
     assert {"exit_code", "file_path", "duration_ms"} <= exec_forbidden
     assert "command" not in exec_forbidden

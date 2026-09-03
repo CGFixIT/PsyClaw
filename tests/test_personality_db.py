@@ -64,7 +64,9 @@ def test_connect_postgres_success_returns_percent_placeholder(monkeypatch, tmp_p
     assert connect.call_args.kwargs.get("autocommit") is False
 
 
-def test_connect_sqlite_chmod_oserror_is_non_fatal(tmp_path, caplog):
+def test_connect_sqlite_chmod_oserror_is_non_fatal(tmp_path, caplog, monkeypatch):
+    # postgres-backend CI sets CYCLAW_DB_URL; this test must still hit sqlite.
+    monkeypatch.delenv("CYCLAW_DB_URL", raising=False)
     db_path = tmp_path / "personality.db"
     db_path.touch()
     with (

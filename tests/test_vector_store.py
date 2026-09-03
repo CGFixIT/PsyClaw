@@ -189,6 +189,11 @@ class TestChromaReaderMissingCollection:
 class TestPgvectorFactoryOffline:
     """pgvector choose-backend / DSN / connect-raise paths without a live DB."""
 
+    @pytest.fixture
+    def _pg_driver(self):
+        pytest.importorskip("psycopg")
+        pytest.importorskip("pgvector")
+
     def test_writer_and_reader_require_dsn(self, monkeypatch):
         from retrieval.vector_store import get_vector_reader, get_vector_writer
 
@@ -208,7 +213,7 @@ class TestPgvectorFactoryOffline:
         writer = get_vector_writer(_pg_cfg())
         writer.close()  # _conn is still None
 
-    def test_connection_propagates_connect_error(self, monkeypatch):
+    def test_connection_propagates_connect_error(self, monkeypatch, _pg_driver):
         import psycopg
 
         from retrieval.vector_store import get_vector_writer
@@ -223,7 +228,7 @@ class TestPgvectorFactoryOffline:
         finally:
             writer.close()
 
-    def test_writer_reset_add_finalize_against_fake_connection(self, monkeypatch):
+    def test_writer_reset_add_finalize_against_fake_connection(self, monkeypatch, _pg_driver):
         """Exercise real writer SQL builders without a live Postgres.
 
         Only ``psycopg.connect`` / ``register_vector`` are stubbed (driver
@@ -267,7 +272,7 @@ class TestPgvectorFactoryOffline:
         assert rows[1][4] == '["b"]'  # list stem_tags coerced to JSON string
         mock_conn.close.assert_called_once()
 
-    def test_reader_missing_table_raises_and_closes(self, monkeypatch):
+    def test_reader_missing_table_raises_and_closes(self, monkeypatch, _pg_driver):
         from retrieval.vector_store import get_vector_reader
 
         monkeypatch.delenv("CYCLAW_VECTOR_DB_URL", raising=False)
@@ -285,7 +290,7 @@ class TestPgvectorFactoryOffline:
 
         mock_conn.close.assert_called_once()
 
-    def test_reader_query_maps_rows(self, monkeypatch):
+    def test_reader_query_maps_rows(self, monkeypatch, _pg_driver):
         from retrieval.vector_store import get_vector_reader
 
         monkeypatch.delenv("CYCLAW_VECTOR_DB_URL", raising=False)
@@ -326,7 +331,7 @@ class TestPgvectorFactoryOffline:
             "stem_tags": ["x"],
         }]
 
-    def test_reader_query_without_source_sha256_column(self, monkeypatch):
+    def test_reader_query_without_source_sha256_column(self, monkeypatch, _pg_driver):
         from retrieval.vector_store import get_vector_reader
 
         monkeypatch.delenv("CYCLAW_VECTOR_DB_URL", raising=False)

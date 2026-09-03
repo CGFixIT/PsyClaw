@@ -490,7 +490,7 @@ def load_sync_config(config_path: str = "config.yaml") -> RcloneConfig:
 
     try:
         rc = RcloneConfig(**kwargs)
-    except TypeError as exc:  # pragma: no cover - unknown keys are filtered; remaining fields are init=True
+    except TypeError as exc:
         raise SyncConfigError(
             f"sync: block invalid: {exc}",
             details={"unknown_keys": sorted(unknown)},

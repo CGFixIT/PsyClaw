@@ -21,7 +21,7 @@ class EndpointTrustError(ValueError):
 
 def hostname_of(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
-    if host.startswith("[") and host.endswith("]"):  # pragma: no cover -- urlparse.hostname strips IPv6 brackets
+    if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
     return host
 

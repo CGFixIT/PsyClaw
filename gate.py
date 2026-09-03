@@ -426,7 +426,7 @@ def _sanitize_error(exc: Exception) -> str:
 setup_logging(cfg)
 logger = logging.getLogger("cyclaw.gate")
 
-if not os.environ.get("CYCLAW_API_KEY", ""):  # pragma: no cover - import-time; tests set the key
+if not os.environ.get("CYCLAW_API_KEY", ""):
     logger.warning(
         "CYCLAW_API_KEY is not set — soul-mutation endpoints (/soul/*) are DISABLED "
         "(fail-closed). Set CYCLAW_API_KEY to enable them."
@@ -729,7 +729,7 @@ def _boot_auth_enabled(auth_cfg: object) -> bool:
 # gate_auth.py's routes always exist regardless (see its own docstring for
 # why), but every handler checks for None first and returns 503.
 auth_manager = None
-if _boot_auth_enabled(cfg.get("auth")):  # pragma: no cover - import-time; shipped/tests leave auth off
+if _boot_auth_enabled(cfg.get("auth")):
     auth_manager = AuthManager(cfg)
     # bootstrap_if_empty() is a no-op on every boot after the first: it only
     # ever acts when the users table is genuinely empty. No credential
@@ -1325,7 +1325,7 @@ require_identity = register_auth_routes(
     enforce_rate_limit=_enforce_rate_limit,
     auth_manager=auth_manager,
 )
-if auth_manager is not None:  # pragma: no cover - import-time; shipped/tests leave auth_manager None
+if auth_manager is not None:
     attach_identity_to_query(app, require_identity)
 # attach_identity_to_query is dependency-shape-agnostic despite its name -- it
 # just appends a parameterless dependency to POST /query. Calling it again with
@@ -1795,7 +1795,7 @@ def _tls_ssl_kwargs() -> tuple[dict[str, str] | None, str | None]:
     tls_cfg = api_cfg.get("tls") if isinstance(api_cfg, dict) else None
     if not _flag_is_true(tls_cfg, "enabled"):
         return None, None
-    if not isinstance(tls_cfg, dict):  # pragma: no cover - _flag_is_true already rejects non-mappings
+    if not isinstance(tls_cfg, dict):
         return None, "api.tls.enabled is true but api.tls is not a mapping"
     cert_raw = tls_cfg.get("certfile")
     key_raw = tls_cfg.get("keyfile")

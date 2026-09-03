@@ -993,7 +993,10 @@ def test_handle_inbound_save_command_prompts_for_confirm(tmp_path: Path) -> None
     send.assert_called_once()
 
 
-def test_dispatch_command_unknown_returns_none(tmp_path: Path) -> None:
+def test_dispatch_command_unknown_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import re
+
+    from telegram import runner as runner_mod
     from telegram.runner import _dispatch_command
 
     cfg = _cfg(tmp_path)
@@ -1001,6 +1004,13 @@ def test_dispatch_command_unknown_returns_none(tmp_path: Path) -> None:
     assert "Attach a photo" in (
         _dispatch_command(cfg, chat_id=42, chat_type="private", text="/save") or ""
     )
+    # Safety net if _CMD_RE ever accepts a verb the if-chain does not handle.
+    monkeypatch.setattr(
+        runner_mod,
+        "_CMD_RE",
+        re.compile(r"^/(help|status|id|online|save|bogus)(?:@\S+)?(?:\s|$)", re.IGNORECASE),
+    )
+    assert _dispatch_command(cfg, chat_id=42, chat_type="private", text="/bogus") is None
 
 
 def test_handle_inbound_disabled_refuses(tmp_path: Path) -> None:
