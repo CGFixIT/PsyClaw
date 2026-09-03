@@ -42,7 +42,7 @@ import subprocess  # nosec B404 - imported only for TimeoutExpired; no process i
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from math import ceil
@@ -62,17 +62,14 @@ from starlette.responses import Response as StarletteResponse
 
 from harness import env_keys
 from harness import schemas as _harness_schemas
-from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
+from harness.agent_routes import register_agent_routes
+from harness.auth_routes import register_auth_routes
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
 from harness.memory_notes import MemoryNotes, MemoryNotesError, rag_flags
 from harness.ollama import DEFAULT_CHAT_TIMEOUT_SEC, HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
 from harness.schemas import (
-    _MAX_ITERATIONS_CEILING,
-    AgentDecisionRequest,
-    AgentPublishRequest,
-    AgentRunRequest,
     ChatRequest,
     ModelSelectRequest,
     RenameRequest,
@@ -84,23 +81,11 @@ from harness.skills_view import list_wired_skills
 from harness.tools_view import list_wired_tools
 from harness.web_search import WebTool, WebToolError
 from llm.client import ResolvedLocalBackend, resolve_local_backend
-from schemas.api import (
-    AuthCreateUserRequest,
-    AuthLoginRequest,
-    AuthSetPasswordRequest,
-    AuthSetRoleRequest,
-    AuthSetupStatusResponse,
-)
 from utils.auth import require_api_key
-from utils.authn import PasswordPolicyError, validate_role
-from utils.authn_manager import BOOTSTRAP_USERNAME
-from utils.errors import AgenticError, AuthBootstrapComplete, AuthUserExists
+from utils.errors import AgenticError
 from utils.logger import _get_config, audit_log, redact_sensitive
 from utils.ops_runner import (
-    REAL_REPO_RUN_MAX_TIMEOUT_SEC,
     OpsError,
-    OpsResult,
-    real_repo_run_budget_sec,
     run_agentic_op,
 )
 from utils.ratelimit import RateLimiter
@@ -1461,317 +1446,16 @@ def create_app(
         return gh_result.to_dict()
 
     # -- agentic coding runs ---------------------------------------------
-    # The operator surface for agentic/real_repo_loop.py's two-step gate: run
-    # (clone, plan, patch, verify -- but never commit), then a separate human
-    # approve/reject that is what actually commits. Each route is one shim
-    # call; harness/ holds no run state of its own, because it cannot: every
-    # call is a fresh `python -m agentic.cli` subprocess (I6), so the only
-    # thing that survives between "start a run" and "decide on it" is the run
-    # record agentic/real_repo_run_store.py writes to disk.
-    #
-    # All three carry the full `guarded` chain, decision included. The plan
-    # this implements argued that throttling an approval is hostile; the
-    # limiter runs FIRST in that chain specifically so it bounds API-key
-    # guessing, and dropping it from the highest-privilege route would remove
-    # that bound exactly where it matters most. At 60 req/60s a decision costs
-    # one of sixty.
-    def _validated_run_id(run_id: str) -> str:
-        """Reject a malformed run_id before it becomes a `--run-id=` argv element."""
-        # fullmatch, not match: Python's `$` also matches just before a
-        # trailing newline, so `match()` would accept "<32 hex>\n" -- the
-        # pattern text stays byte-identical to agentic's so the drift test
-        # still compares the two.
-        if not RUN_ID_RE.fullmatch(run_id):
-            raise _err(
-                _HTTP_BAD_REQUEST,
-                AgenticError(
-                    "run_id must be 32 lowercase hex characters",
-                    code="INVALID_RUN_ID",
-                    details={"run_id": run_id[:_MAX_ECHOED_RUN_ID_LEN]},
-                ),
-            )
-        return run_id
-
-    def _agentic_call(action: str, call: Callable[[], OpsResult]) -> dict:
-        """Run one shim call, mapping every failure into the console's envelope.
-
-        Takes a thunk rather than ``**kwargs`` on purpose: forwarding kwargs
-        through this helper would have to type them as ``object`` and silence
-        the resulting mismatch, which would stop mypy checking the ONE thing
-        worth checking here -- that each route passes ``run_agentic_op`` the
-        kwargs that action actually takes. With a thunk the call is written at
-        its route, fully typed, and this only owns the exception mapping.
-
-        Note what is NOT translated: a non-zero CLI exit is a successful shim
-        call, so it returns HTTP 200 carrying ok=false plus the CLI's own
-        stderr. That is the same contract GET /api/github/status already has,
-        and it is what lets the console distinguish "the run was refused"
-        (exit 4) from "the request was malformed" (400) without parsing prose.
-        """
-        try:
-            return call().to_dict()
-        except OpsError as exc:
-            raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise _timeout_err(action, exc) from exc
-        except OSError as exc:
-            # ops_runner._write_body / _write_checks_file raise a bare OSError
-            # (disk full, unwritable temp dir) before run_agentic_op ever
-            # spawns the CLI -- neither of the two excepts above catches that,
-            # so it used to escape as an unhandled 500 the console's api()
-            # helper can't parse. 502: the shim's own environment failed, the
-            # same class of "dependency, not the request, is broken" as the
-            # HarnessLLMError -> 502 mapping in /api/chat.
-            raise _err(
-                _HTTP_BAD_GATEWAY,
-                AgenticError(f"{action} shim failed: {redact_sensitive(str(exc))}", code="SHIM_IO_ERROR"),
-            ) from exc
-
-    @app.get("/api/agent/checks")
-    def agent_checks() -> dict:
-        """The selectable verification profiles. Open: a static allow-list listing.
-
-        Read-only, spawns nothing, and reveals only the names of commands this
-        module already hardcodes -- so it stays outside `guarded` for the same
-        reason /api/registry does: the console must be able to populate its
-        help before the operator has entered a key.
-        """
-        return {"profiles": [{"name": name, "description": desc} for name, desc in available_profiles()]}
-
-    @app.post("/api/agent/run", dependencies=guarded)
-    def agent_run(req: AgentRunRequest) -> dict:
-        """Start one real-repo run. BLOCKS until the run finishes.
-
-        The wall-clock budget is derived per request by
-        utils.ops_runner._real_repo_run_timeout_sec from this request's own
-        --max-iterations and check count, capped at 3600s -- it was a flat 900s
-        until that flat ceiling started killing legitimate runs once the
-        planner timeout became configurable (default 720s x 3 iterations).
-        A shape whose uncapped budget exceeds that cap is refused up front
-        with 422 AGENTIC_BUDGET_EXCEEDED instead of being SIGKILLed at the
-        cap (which leaks the clone and a stuck 'running' record).
-
-        Deliberately synchronous, and deliberately not a poll-a-background-job
-        design, for two reasons found in the backend rather than chosen here:
-        agentic/cli.py writes the run record only when the run ENDS, so a
-        status poll returns "not found" for the whole run and there is no
-        progress to report; and the run_id is minted inside that subprocess and
-        first appears in its stdout, so a route that returned early would hand
-        the operator no handle to approve with. GET /api/github/status already
-        blocks on a 120s subprocess in this same app -- this is that shape with
-        a longer budget, not a new one.
-        """
-        try:
-            checks = resolve_check_profiles(req.checks)
-        except CheckProfileError as exc:
-            raise _err(
-                _HTTP_BAD_REQUEST,
-                AgenticError(str(exc), code="UNKNOWN_CHECK_PROFILE", details={"requested": req.checks}),
-            ) from exc
-        # Refuse shapes whose own budget formula exceeds the subprocess cap.
-        # Past the cap, subprocess.run SIGKILLs the CLI mid-flight, which leaks
-        # the repo clone and a permanently-'running' record no later call can
-        # resolve (utils/ops_runner.py documents that path as unrecoverable).
-        # Failing here, with the arithmetic, is the legible version of that
-        # outcome -- and unlike the SIGKILL it costs nothing.
-        estimated_sec = real_repo_run_budget_sec(req.max_iterations, len(checks))
-        if estimated_sec > REAL_REPO_RUN_MAX_TIMEOUT_SEC:
-            # The envelope is tight and config-dependent: the budget sums
-            # planner_timeout_sec (720 shipped) per iteration plus 120s per
-            # check per iteration, so with the shipped config this admits about
-            # 3 iterations at one check, and fewer as checks are added --
-            # selecting every available profile at the default iteration count
-            # already exceeds the cap. A bare refusal would leave the operator
-            # guessing which knob to turn, so compute the largest iteration
-            # count that fits THEIR check count by asking the same authoritative
-            # function (never a second copy of the arithmetic).
-            fits = [
-                n for n in range(1, _MAX_ITERATIONS_CEILING + 1)
-                if real_repo_run_budget_sec(n, len(checks)) <= REAL_REPO_RUN_MAX_TIMEOUT_SEC
-            ]
-            max_fitting = max(fits, default=0)
-            remedy = (
-                f"at {len(checks)} check profile(s) the most that fits is max_iterations={max_fitting}"
-                if max_fitting
-                else f"no iteration count fits with {len(checks)} check profile(s) -- select fewer checks"
-            )
-            raise _err(
-                _HTTP_UNPROCESSABLE,
-                AgenticError(
-                    f"requested shape budgets ~{estimated_sec}s but the synchronous run cap is "
-                    f"{REAL_REPO_RUN_MAX_TIMEOUT_SEC}s, so the run would be killed mid-flight; "
-                    f"{remedy}",
-                    code="AGENTIC_BUDGET_EXCEEDED",
-                    details={
-                        "estimated_sec": estimated_sec,
-                        "cap_sec": REAL_REPO_RUN_MAX_TIMEOUT_SEC,
-                        "max_iterations": req.max_iterations,
-                        "check_count": len(checks),
-                        "max_iterations_that_fit": max_fitting,
-                    },
-                ),
-            )
-        try:
-            assert_allowed(
-                _AGENT_RUN_TOOL,
-                ("real-repo-run",),
-                allowlist=_agent_run_tool_allowlist(),
-            )
-        except ToolDenied as exc:
-            raise _err(_HTTP_FORBIDDEN, exc) from exc
-        # Two concurrent real-repo-run subprocesses always target the same
-        # agentic.deepagent_github.base_url, so a double-click/retried POST
-        # spawning two of them (each paying for its own LLM calls) must be
-        # excluded unconditionally -- independent of whatever /api/chat is
-        # doing.
-        if not agent_run_gate.claim():
-            raise _err(
-                _HTTP_CONFLICT,
-                AgenticError(
-                    "another agent run is already in progress",
-                    code="AGENT_RUN_BUSY",
-                ),
-            )
-        try:
-            # Additionally exclude a concurrent chat turn, but only when it
-            # would actually contend for the same backend: real-repo-run's
-            # planner is built straight from agentic.deepagent_github.base_url
-            # (independent of models.local_llm.fallback), so when fallback is
-            # active and /api/chat has moved to a live fallback backend, the
-            # two are not contending for anything and must not block each
-            # other -- see _agent_run_shares_chat_backend's docstring.
-            shares_backend = _agent_run_shares_chat_backend()
-            if shares_backend and not generation_gate.claim():
-                raise _err(
-                    _HTTP_CONFLICT,
-                    AgenticError(
-                        "a local model chat turn is already running",
-                        code="AGENT_RUN_BUSY",
-                    ),
-                )
-            try:
-                return _agentic_call(
-                    "real-repo-run",
-                    lambda: run_agentic_op(
-                        "real-repo-run",
-                        instruction=req.instruction,
-                        checks=checks,
-                        branch=req.branch,
-                        commit_message=req.commit_message,
-                        reason=req.reason,
-                        confirm=req.confirm,
-                        max_iterations=req.max_iterations,
-                        plan=req.plan,
-                        read_files=req.read_files,
-                        pr=req.pr,
-                        issue=req.issue,
-                    ),
-                )
-            finally:
-                if shares_backend:
-                    generation_gate.release()
-        finally:
-            agent_run_gate.release()
-
-    @app.get("/api/agent/runs/{run_id}", dependencies=guarded)
-    def agent_run_status(run_id: str) -> dict:
-        """Read one run's persisted record.
-
-        Guarded despite being a read: the record names a branch, the changed
-        file paths, and the clone's absolute location, and serving it spawns a
-        subprocess like /api/github/status does.
-        """
-        checked = _validated_run_id(run_id)
-        return _agentic_call(
-            "real-repo-run-status", lambda: run_agentic_op("real-repo-run-status", run_id=checked)
-        )
-
-    @app.post("/api/agent/runs/{run_id}/decision", dependencies=guarded)
-    def agent_run_decision(run_id: str, req: AgentDecisionRequest) -> dict:
-        """Approve (commit) or reject (discard) a pending run.
-
-        This is the request that can actually put a commit in the clone --
-        the only one in this app that reaches a git write. It performs no
-        gating of its own on purpose: the four conditions
-        (allow_git_write_tools, a pending record, a non-terminal status, git's
-        own refusal of an empty second commit) all live in agentic/, where
-        they are tested, and re-implementing any of them here would create a
-        second place for them to drift.
-        """
-        checked = _validated_run_id(run_id)
-        return _agentic_call(
-            "real-repo-run-decide",
-            lambda: run_agentic_op("real-repo-run-decide", run_id=checked, decision=req.decision),
-        )
-
-    @app.post("/api/agent/runs/{run_id}/push", dependencies=guarded)
-    def agent_run_push(run_id: str) -> dict:
-        """Push an approved run's branch to origin. The first request here that leaves the box.
-
-        Its own route rather than a field on the decision body because it is
-        its own decision, taken AFTER approve: the backend's
-        ``real-repo-run-decide`` refuses a second call on an already-decided
-        run, so an approve-then-push sequence through one endpoint could never
-        reach the push. It carries no body -- invoking it IS the confirmation,
-        the same shape ``decision: "approve"`` already has.
-
-        Gating stays in ``agentic/`` (``allow_git_write_tools``, ships
-        ``false``, enforced inside ``push_branch``; plus the run-state guard
-        ``require_approved_for_push``). Re-implementing either here would give
-        them a second place to drift.
-        """
-        checked = _validated_run_id(run_id)
-        return _agentic_call(
-            "real-repo-run-push", lambda: run_agentic_op("real-repo-run-push", run_id=checked)
-        )
-
-    @app.post("/api/agent/runs/{run_id}/publish", dependencies=guarded)
-    def agent_run_publish(run_id: str, req: AgentPublishRequest) -> dict:
-        """Open a draft PR for an already-pushed run. The most gated route in this app.
-
-        Reaches ``agentic/writer.py``'s six-gate chain. That chain's first gate
-        (``EXECUTION_ENABLED``) ships ``True`` following the operator
-        enablement of 2026-08-07 -- it is NO LONGER the backstop this docstring
-        once described. What refuses on a shipped checkout is gate 0,
-        ``agentic.enabled`` (ships ``false``), plus the per-call
-        ``reason``/``confirm`` this route's own body must carry. Once an
-        operator turns the layer on, this route can open a real draft PR.
-
-        Read that plainly: this is a network-reachable path to a GitHub
-        mutation, held by one config boolean. The route-level guard chain
-        (rate limit -> same-origin -> API key -> CSRF token) is what keeps it
-        to an authenticated, same-origin, local caller. See
-        ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md`` for the full chain and the
-        ``CYCLAW_AGENTIC_WRITE_DISABLE`` rollback.
-        """
-        checked = _validated_run_id(run_id)
-        return _agentic_call(
-            "real-repo-run-publish",
-            lambda: run_agentic_op(
-                "real-repo-run-publish", run_id=checked, reason=req.reason, confirm=req.confirm,
-            ),
-        )
-
-    @app.post("/api/agent/runs/{run_id}/discard", dependencies=guarded)
-    def agent_run_discard(run_id: str) -> dict:
-        """Reclaim a decided run's clone from disk. The only route that frees disk.
-
-        Not redundant with ``reject``: reject applies only to a run still
-        awaiting a decision, and an APPROVED run's clone is deliberately
-        retained past its decision because push/publish still need it. Without
-        this route a console-driven operator accumulates one full repository
-        clone per approved run under ``workspace_root`` with no way to free
-        any of them -- the CLI had the reclamation step, the console had no
-        path to it.
-
-        The refusal for a still-pending run lives in ``agentic/`` (discarding
-        then would destroy a live candidate with no decision ever recorded),
-        not here.
-        """
-        checked = _validated_run_id(run_id)
-        return _agentic_call(
-            "real-repo-run-discard", lambda: run_agentic_op("real-repo-run-discard", run_id=checked)
-        )
+    # The operator surface for agentic/real_repo_loop.py's two-step gate lives
+    # in harness/agent_routes.py (same register-and-inject pattern as
+    # gate_ops.py). create_app keeps the gates and the guarded chain; the
+    # route bodies do not.
+    register_agent_routes(
+        app,
+        guarded=guarded,
+        agent_run_gate=agent_run_gate,
+        generation_gate=generation_gate,
+    )
 
     # -- harness optimizer runs ------------------------------------------
     @app.get("/api/harness/runs")
@@ -1810,206 +1494,19 @@ def create_app(
                 runs.append({"run_id": path.stem})
         return {"runs": runs, "count": len(runs)}
 
-    def _require_harness_auth():
-        if harness_auth is None:
-            raise HTTPException(
-                status_code=_HTTP_UNAVAILABLE,
-                detail={
-                    _CODE_KEY: "AUTH_DISABLED",
-                    _MESSAGE_KEY: "authentication is not enabled",
-                    _DETAILS_KEY: {},
-                },
-            )
-        return harness_auth
-
-    def _auth_http(status: int, code: str, message: str) -> HTTPException:
-        return HTTPException(
-            status_code=status,
-            detail={_CODE_KEY: code, _MESSAGE_KEY: message, _DETAILS_KEY: {}},
-        )
-
-    def _harness_actor(request: Request):
-        manager = _require_harness_auth()
-        token = request.cookies.get(HARNESS_SESSION_COOKIE) or ""
-        session_info = manager.validate_session(token)
-        if session_info is None:
-            raise _auth_http(_HTTP_UNAUTHORIZED, "AUTH_REQUIRED", "authentication required")
-        account = manager.get_user(session_info.username)
-        if account is None:
-            raise _auth_http(_HTTP_UNAUTHORIZED, "AUTH_REQUIRED", "authentication required")
-        return account
-
-    def _require_user_admin(account) -> None:
-        if account.role not in {_ROLE_ADMIN, _ROLE_OPERATOR}:
-            raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
-
-    def _user_payload(account) -> dict:
-        return {
-            _USERNAME_KEY: account.username,
-            _ROLE_KEY: account.role,
-            "disabled": account.disabled,
-            "created_ts": account.created_ts,
-            "last_login_ts": account.last_login_ts,
-            "locked": account.locked_until_ts is not None,
-        }
-
     auth_open = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin)]
     auth_sess = [
         Depends(_enforce_rate_limit),
         Depends(_enforce_same_origin),
         Depends(_enforce_csrf_token),
     ]
-
-    @app.get("/api/auth/setup-status", dependencies=[Depends(_enforce_rate_limit)])
-    def harness_setup_status() -> AuthSetupStatusResponse:
-        manager = _require_harness_auth()
-        pending = manager.needs_password_setup()
-        return AuthSetupStatusResponse(
-            enabled=True,
-            needs_password=pending,
-            username=BOOTSTRAP_USERNAME if pending else None,
-        )
-
-    @app.post("/api/auth/bootstrap-password", dependencies=auth_open)
-    def harness_bootstrap_password(
-        request: Request, response: Response, req: AuthSetPasswordRequest
-    ) -> dict:
-        manager = _require_harness_auth()
-        if not _is_loopback_peer(request) or _looks_proxied(request):
-            raise _auth_http(
-                _HTTP_FORBIDDEN,
-                "AUTH_LOOPBACK_ONLY",
-                "first password must be set from this machine "
-                "without reverse-proxy forwarding headers",
-            )
-        try:
-            login_result = manager.bootstrap_set_password(req.password)
-        except AuthBootstrapComplete as exc:
-            raise _auth_http(_HTTP_CONFLICT, exc.code, exc.message) from exc
-        except PasswordPolicyError as exc:
-            raise _auth_http(_HTTP_UNPROCESSABLE, "AUTH_POLICY", str(exc)) from exc
-        response.set_cookie(
-            key=HARNESS_SESSION_COOKIE,
-            value=login_result.session_id,
-            httponly=True,
-            samesite="strict",
-            secure=False,
-            path="/",
-        )
-        return {
-            _USERNAME_KEY: login_result.username,
-            _ROLE_KEY: _ROLE_ADMIN,
-            "csrf_token": login_result.csrf_token,
-        }
-
-    @app.post("/api/auth/login", dependencies=auth_open)
-    async def harness_login(req: AuthLoginRequest, response: Response) -> dict:
-        from utils.errors import AuthAccountLocked, AuthLoginFailed
-
-        manager = _require_harness_auth()
-        try:
-            login_result = manager.login(req.username, req.password)
-        except AuthAccountLocked as exc:
-            raise _auth_http(_HTTP_LOCKED, exc.code, exc.message) from exc
-        except AuthLoginFailed as exc:
-            raise _auth_http(_HTTP_UNAUTHORIZED, exc.code, exc.message) from exc
-        response.set_cookie(
-            key=HARNESS_SESSION_COOKIE,
-            value=login_result.session_id,
-            httponly=True,
-            samesite="strict",
-            secure=False,
-            path="/",
-        )
-        account = manager.get_user(login_result.username)
-        role = _ROLE_OPERATOR if account is None else account.role
-        return {
-            _USERNAME_KEY: login_result.username,
-            _ROLE_KEY: role,
-            "csrf_token": login_result.csrf_token,
-        }
-
-    @app.post("/api/auth/logout", dependencies=auth_sess)
-    def harness_logout(request: Request, response: Response) -> dict:
-        manager = _require_harness_auth()
-        token = request.cookies.get(HARNESS_SESSION_COOKIE)
-        if token:
-            manager.logout(token)
-        response.delete_cookie(key=HARNESS_SESSION_COOKIE, path="/")
-        return {_OK_KEY: True}
-
-    @app.get("/api/auth/whoami", dependencies=auth_open)
-    def harness_whoami(request: Request) -> dict:
-        account = _harness_actor(request)
-        return {_USERNAME_KEY: account.username, _ROLE_KEY: account.role}
-
-    @app.get("/api/auth/users", dependencies=auth_open)
-    def harness_list_users(request: Request) -> list:
-        account = _harness_actor(request)
-        _require_user_admin(account)
-        manager = _require_harness_auth()
-        return [_user_payload(row) for row in manager.list_users()]
-
-    @app.post("/api/auth/users", dependencies=auth_sess)
-    def harness_create_user(request: Request, req: AuthCreateUserRequest) -> dict:
-        account = _harness_actor(request)
-        _require_user_admin(account)
-        # Canonicalize BEFORE the operator/admin comparison -- comparing the
-        # raw request string let "Admin"/"ADMIN"/"admin " skip this guard
-        # entirely (req.role == _ROLE_ADMIN is a literal-string ==), then get
-        # stored as canonical "admin" once create_user() re-validates it.
-        # gate_auth.py's auth_create_user does this in the correct order;
-        # mirror it here.
-        try:
-            role = validate_role(req.role)
-        except PasswordPolicyError as exc:
-            raise _auth_http(_HTTP_UNPROCESSABLE, "AUTH_POLICY", str(exc)) from exc
-        if account.role == _ROLE_OPERATOR and role == _ROLE_ADMIN:
-            raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
-        manager = _require_harness_auth()
-        # gate_auth.py's auth_create_user turns AuthUserExists into a 409; this
-        # copy caught nothing, so a duplicate username escaped as an unhandled
-        # 500 (harness/server.py registers only a RequestValidationError
-        # handler). No race needed -- the ordinary second create hit it too.
-        try:
-            created = manager.create_user(req.username, req.password, role)
-        except AuthUserExists as exc:
-            raise _auth_http(_HTTP_CONFLICT, "AUTH_USER_EXISTS", exc.message) from exc
-        new_user = manager.get_user(created)
-        if new_user is None:
-            raise _auth_http(_HTTP_UNAVAILABLE, "AUTH_ERROR", "created user missing")
-        return _user_payload(new_user)
-
-    @app.post("/api/auth/users/{username}/password", dependencies=auth_sess)
-    def harness_set_password(request: Request, username: str, req: AuthSetPasswordRequest) -> dict:
-        account = _harness_actor(request)
-        manager = _require_harness_auth()
-        target = manager.get_user(username)
-        if target is None:
-            raise _auth_http(_HTTP_NOT_FOUND, "AUTH_USER_NOT_FOUND", "unknown user")
-        operator_blocked = account.role == _ROLE_OPERATOR and target.role == _ROLE_ADMIN
-        if account.role != _ROLE_ADMIN and operator_blocked:
-            raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
-        if account.role not in {_ROLE_ADMIN, _ROLE_OPERATOR}:
-            raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
-        manager.set_password(username, req.password)
-        return {_OK_KEY: True}
-
-    @app.post("/api/auth/users/{username}/role", dependencies=auth_sess)
-    def harness_set_role(request: Request, username: str, req: AuthSetRoleRequest) -> dict:
-        account = _harness_actor(request)
-        if account.role != _ROLE_ADMIN:
-            raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
-        _require_harness_auth().set_role(username, req.role)
-        return {_OK_KEY: True}
-
-    @app.delete("/api/auth/users/{username}", dependencies=auth_sess)
-    def harness_delete_user(request: Request, username: str) -> dict:
-        account = _harness_actor(request)
-        if account.role != _ROLE_ADMIN:
-            raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
-        _require_harness_auth().delete_user(username)
-        return {_OK_KEY: True}
+    register_auth_routes(
+        app,
+        harness_auth=harness_auth,
+        auth_open=auth_open,
+        auth_sess=auth_sess,
+        rate_limit_only=[Depends(_enforce_rate_limit)],
+    )
 
     return app
 
