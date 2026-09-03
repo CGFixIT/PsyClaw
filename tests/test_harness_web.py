@@ -331,3 +331,7 @@ def test_corrupt_allowlist_is_not_overwritten(cfg):
         tool.deny("https://docs.python.org/")
     assert denied.value.code == "WEB_ALLOWLIST_UNREADABLE"
     assert path.read_bytes() == garbage
+    with pytest.raises(WebToolError) as status:
+        tool.status()
+    assert status.value.code == "WEB_ALLOWLIST_UNREADABLE"
+    assert path.read_bytes() == garbage

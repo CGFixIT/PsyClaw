@@ -236,6 +236,10 @@ def test_corrupt_notes_are_not_overwritten(tmp_path):
         store.forget("deadbeef")
     assert forgotten.value.code == "MEMORY_NOTES_UNREADABLE"
     assert path.read_bytes() == garbage
+    with pytest.raises(MemoryNotesError) as status:
+        store.status(False)
+    assert status.value.code == "MEMORY_NOTES_UNREADABLE"
+    assert path.read_bytes() == garbage
 
 
 def test_memory_module_does_not_import_rag_memory():
