@@ -281,6 +281,7 @@ def load_guardrails_config(config_path: str = "config.yaml") -> GuardrailsConfig
     # guardrails.reasoning_effort is overwritten rather than allowed to diverge.
     # resolve_reasoning_effort raises ConfigError on an invalid value.
     #
+    #
     # Gated HERE rather than at the NeMo call site so the value carried on the
     # config object is, by construction, already safe to put on the wire (same
     # principle as ResolvedLocalBackend.reasoning_effort in llm/client.py):
