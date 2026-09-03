@@ -221,6 +221,23 @@ def test_chat_injects_memory_only_when_on(cfg, monkeypatch):
     assert "Operator memory" in on_system
 
 
+def test_corrupt_notes_are_not_overwritten(tmp_path):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    path = memory_dir / "notes.json"
+    garbage = b"{not-json"
+    path.write_bytes(garbage)
+    store = MemoryNotes(memory_dir)
+    with pytest.raises(MemoryNotesError) as added:
+        store.add("prefer pytest over unittest")
+    assert added.value.code == "MEMORY_NOTES_UNREADABLE"
+    assert path.read_bytes() == garbage
+    with pytest.raises(MemoryNotesError) as forgotten:
+        store.forget("deadbeef")
+    assert forgotten.value.code == "MEMORY_NOTES_UNREADABLE"
+    assert path.read_bytes() == garbage
+
+
 def test_memory_module_does_not_import_rag_memory():
     import ast
     from pathlib import Path

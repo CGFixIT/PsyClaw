@@ -27,6 +27,7 @@ from harness.ollama import HarnessChatClient
 
 _KEY = "harness-auth-test-key"
 _AUTH = {"Authorization": f"Bearer {_KEY}"}
+_BOOTSTRAP_PASSWORD = "correct horse battery staple"
 
 # Every route the auth gate is supposed to cover, with a body that would succeed
 # if the request got past the dependency chain.
@@ -866,3 +867,76 @@ def test_operator_cannot_escalate_via_role_case(tmp_path, monkeypatch, cfg):
         "/api/auth/login", json={"username": "backdoor", "password": "another good password!!"}
     )
     assert backdoor_login.status_code == 401
+
+
+def _rbac_admin_client(tmp_path, monkeypatch, cfg) -> TestClient:
+    """Logged-in bootstrap admin. Unhandled 500s stay HTTP so mapper tests can assert."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    assert loop.post(
+        "/api/auth/bootstrap-password", json={"password": _BOOTSTRAP_PASSWORD}
+    ).status_code == 200
+    admin = TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+        raise_server_exceptions=False,
+    )
+    login = admin.post(
+        "/api/auth/login", json={"username": "admin", "password": _BOOTSTRAP_PASSWORD}
+    )
+    assert login.status_code == 200
+    return admin
+
+
+def test_set_password_policy_is_422_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.post(
+        "/api/auth/users/admin/password",
+        json={"password": "short"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 422, f"expected 422, got {resp.status_code}"
+    assert resp.json()["detail"]["code"] == "AUTH_POLICY"
+
+
+def test_last_admin_delete_is_403_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.delete("/api/auth/users/admin", headers=_csrf(admin))
+    assert resp.status_code == 403, f"expected 403, got {resp.status_code}"
+    assert resp.json()["detail"]["code"] == "AUTH_LAST_ADMIN"
+
+
+def test_last_admin_role_is_403_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.post(
+        "/api/auth/users/admin/role",
+        json={"role": "operator"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 403, f"expected 403, got {resp.status_code}"
+    assert resp.json()["detail"]["code"] == "AUTH_LAST_ADMIN"
+
+
+def test_unknown_user_set_role_is_404_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.post(
+        "/api/auth/users/nobody/role",
+        json={"role": "operator"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 404, f"expected 404, got {resp.status_code}"
+    assert resp.json()["detail"]["code"] == "AUTH_USER_NOT_FOUND"
+
+
+def test_unknown_user_delete_is_404_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.delete("/api/auth/users/nobody", headers=_csrf(admin))
+    assert resp.status_code == 404, f"expected 404, got {resp.status_code}"
+    assert resp.json()["detail"]["code"] == "AUTH_USER_NOT_FOUND"

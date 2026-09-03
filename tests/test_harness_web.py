@@ -316,3 +316,18 @@ def test_routes_allow_on_fetch_search(cfg):
     assert chat.status_code == 200
     client.post("/api/web/forget")
     assert client.get("/api/web").json()["injected"] is False
+
+
+def test_corrupt_allowlist_is_not_overwritten(cfg):
+    path = cfg.tools_dir / "web_allowlist.json"
+    garbage = b"{not-json"
+    path.write_bytes(garbage)
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    with pytest.raises(WebToolError) as allowed:
+        tool.allow("https://docs.python.org/")
+    assert allowed.value.code == "WEB_ALLOWLIST_UNREADABLE"
+    assert path.read_bytes() == garbage
+    with pytest.raises(WebToolError) as denied:
+        tool.deny("https://docs.python.org/")
+    assert denied.value.code == "WEB_ALLOWLIST_UNREADABLE"
+    assert path.read_bytes() == garbage

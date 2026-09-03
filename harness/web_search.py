@@ -190,8 +190,12 @@ def parse_allow_entry(raw: str) -> dict[str, str]:
 def _load_entries(path: Path) -> list[dict[str, str]]:
     try:
         parsed = json.loads(path.read_text(encoding=_UTF8))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Existing corrupt allowlist must not look like "empty" -- allow/deny
+        # would then rewrite from [] and wipe recoverable bytes.
+        raise WebToolError("allowlist is unreadable", code="WEB_ALLOWLIST_UNREADABLE") from exc
     rows = parsed.get("entries", parsed) if isinstance(parsed, dict) else parsed
     if not isinstance(rows, list):
         return []
