@@ -269,5 +269,11 @@ If you do one thing because of that news story: inventory every place the model 
 <hr>
 
 https://www.minimus.io/post/chainguard-alternatives-hardened-image-providers
+https://images.chainguard.dev/directory/image/langchain/compare
+https://www.youtube.com/watch?v=NEFw4q-ouu8
+https://www.youtube.com/watch?v=tZQ9t55ZmEw
+https://www.youtube.com/watch?v=30xKxdBCtmg
+https://www.youtube.com/watch?v=AGAUL0EGA_A
+..and queue spiderman pointing at each other meme with langgraph replacing its core - https://www.youtube.com/watch?v=6DqCfh46oRk
 
 ^lolz too many things but might as well read more about it since its like an inverse oof lanchain but a container at least at surface read
