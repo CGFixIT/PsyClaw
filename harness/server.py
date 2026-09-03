@@ -1029,11 +1029,17 @@ def create_app(
     @app.get("/api/web")
     def web_status() -> dict:
         """Allowlist + enable flag. Open: hosts only, no page text."""
-        return web.status()
+        try:
+            return web.status()
+        except WebToolError as exc:
+            raise _web_err(exc) from None
 
     @app.post("/api/web", dependencies=guarded)
     def web_toggle(req: SoulToggleRequest) -> dict:
-        return web.set_enabled(req.enabled)
+        try:
+            return web.set_enabled(req.enabled)
+        except WebToolError as exc:
+            raise _web_err(exc) from None
 
     @app.post("/api/web/allow", dependencies=guarded)
     def web_allow(req: _harness_schemas.WebUrlRequest) -> dict:
@@ -1089,13 +1095,19 @@ def create_app(
         prompt -- not boot-time metadata (mirrors the /api/sessions{id} and
         /api/github/status precedent, and the removed Session.last_excerpt
         exposure)."""
-        return _memory_payload()
+        try:
+            return _memory_payload()
+        except MemoryNotesError as exc:
+            raise _memory_err(exc) from exc
 
     @app.post("/api/memory", dependencies=guarded)
     def memory_toggle(req: SoulToggleRequest) -> dict:
         cfg.memory_enabled = req.enabled
         cfg.save()
-        return _memory_payload()
+        try:
+            return _memory_payload()
+        except MemoryNotesError as exc:
+            raise _memory_err(exc) from exc
 
     @app.post("/api/memory/add", dependencies=guarded)
     def memory_add(req: _harness_schemas.MemoryNoteRequest) -> dict:

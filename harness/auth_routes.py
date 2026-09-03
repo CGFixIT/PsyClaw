@@ -32,7 +32,7 @@ from schemas.api import (
 )
 from utils.authn import PasswordPolicyError, validate_role
 from utils.authn_manager import BOOTSTRAP_USERNAME
-from utils.errors import AuthBootstrapComplete, AuthUserExists
+from utils.errors import AuthBootstrapComplete, AuthLastAdmin, AuthUserExists, AuthUserNotFound
 
 
 def register_auth_routes(
@@ -65,6 +65,16 @@ def register_auth_routes(
             status_code=status,
             detail={hs._CODE_KEY: code, hs._MESSAGE_KEY: message, hs._DETAILS_KEY: {}},
         )
+
+    def _raise_auth_error(exc: Exception) -> None:
+        # Local copy of gate_auth._raise_auth_error -- I6 forbids importing it.
+        if isinstance(exc, PasswordPolicyError):
+            raise _auth_http(hs._HTTP_UNPROCESSABLE, "AUTH_POLICY", str(exc)) from exc
+        if isinstance(exc, AuthUserNotFound):
+            raise _auth_http(hs._HTTP_NOT_FOUND, exc.code, exc.message) from exc
+        if isinstance(exc, AuthLastAdmin):
+            raise _auth_http(hs._HTTP_FORBIDDEN, exc.code, exc.message) from exc
+        raise exc
 
     def _harness_actor(request: Request):
         manager = _require_harness_auth()
@@ -223,7 +233,10 @@ def register_auth_routes(
             raise _auth_http(hs._HTTP_FORBIDDEN, hs._PERM_DENIED, hs._DENIED_MSG)
         if account.role not in {hs._ROLE_ADMIN, hs._ROLE_OPERATOR}:
             raise _auth_http(hs._HTTP_FORBIDDEN, hs._PERM_DENIED, hs._DENIED_MSG)
-        manager.set_password(username, req.password)
+        try:
+            manager.set_password(username, req.password)
+        except Exception as exc:
+            _raise_auth_error(exc)
         return {hs._OK_KEY: True}
 
     @app.post("/api/auth/users/{username}/role", dependencies=auth_sess)
@@ -231,7 +244,10 @@ def register_auth_routes(
         account = _harness_actor(request)
         if account.role != hs._ROLE_ADMIN:
             raise _auth_http(hs._HTTP_FORBIDDEN, hs._PERM_DENIED, hs._DENIED_MSG)
-        _require_harness_auth().set_role(username, req.role)
+        try:
+            _require_harness_auth().set_role(username, req.role)
+        except Exception as exc:
+            _raise_auth_error(exc)
         return {hs._OK_KEY: True}
 
     @app.delete("/api/auth/users/{username}", dependencies=auth_sess)
@@ -239,5 +255,8 @@ def register_auth_routes(
         account = _harness_actor(request)
         if account.role != hs._ROLE_ADMIN:
             raise _auth_http(hs._HTTP_FORBIDDEN, hs._PERM_DENIED, hs._DENIED_MSG)
-        _require_harness_auth().delete_user(username)
+        try:
+            _require_harness_auth().delete_user(username)
+        except Exception as exc:
+            _raise_auth_error(exc)
         return {hs._OK_KEY: True}

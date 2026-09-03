@@ -221,6 +221,57 @@ def test_chat_injects_memory_only_when_on(cfg, monkeypatch):
     assert "Operator memory" in on_system
 
 
+def test_chat_does_not_500_on_corrupt_notes(cfg):
+    cfg.memory_enabled = True
+    cfg.save()
+    cfg.memory_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg.memory_dir / "notes.json"
+    garbage = b"{not-json"
+    path.write_bytes(garbage)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "model": "qwen3.8:27b-mlx",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.8:27b-mlx",
+        transport=httpx.MockTransport(handler),
+    )
+    app = harness_server.create_app(cfg, chat)
+    test_client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = test_client.post("/api/sessions", json={"title": "m"}).json()["session_id"]
+    resp = test_client.post("/api/chat", json={"message": "hi", "session_id": sid})
+    assert resp.status_code == 200, f"expected 200, got {resp.status_code}"
+    assert path.read_bytes() == garbage
+
+
+def test_corrupt_notes_are_not_overwritten(tmp_path):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    path = memory_dir / "notes.json"
+    garbage = b"{not-json"
+    path.write_bytes(garbage)
+    store = MemoryNotes(memory_dir)
+    with pytest.raises(MemoryNotesError) as added:
+        store.add("prefer pytest over unittest")
+    assert added.value.code == "MEMORY_NOTES_UNREADABLE"
+    assert path.read_bytes() == garbage
+    with pytest.raises(MemoryNotesError) as forgotten:
+        store.forget("deadbeef")
+    assert forgotten.value.code == "MEMORY_NOTES_UNREADABLE"
+    assert path.read_bytes() == garbage
+    with pytest.raises(MemoryNotesError) as status:
+        store.status(False)
+    assert status.value.code == "MEMORY_NOTES_UNREADABLE"
+    assert path.read_bytes() == garbage
+    assert store.context_text() == ""
+    assert path.read_bytes() == garbage
+
+
 def test_memory_module_does_not_import_rag_memory():
     import ast
     from pathlib import Path

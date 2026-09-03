@@ -133,12 +133,17 @@ def _coerce_note(raw: object) -> dict[str, str] | None:
 
 
 def _load_notes(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        return []
     try:
         parsed = json.loads(path.read_text(encoding=_UTF8))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Existing corrupt/unreadable notes must not look like "empty" -- add
+        # and forget would then _save_notes([]) and wipe recoverable bytes.
+        raise MemoryNotesError(
+            "notes file is unreadable",
+            code="MEMORY_NOTES_UNREADABLE",
+        ) from exc
     raw = parsed.get(_NOTES_KEY) if isinstance(parsed, dict) else None
     if not isinstance(raw, list):
         return []
@@ -213,7 +218,13 @@ class MemoryNotes:
             return {"cleared": True, "count": 0}
 
     def context_text(self) -> str:
-        notes = _load_notes(self.path)
+        # Chat/loop inject this into the system prompt. Mutate/status stay
+        # fail-closed; a corrupt file must not 500 /api/chat (and this path
+        # never writes, so returning "" cannot wipe recoverable bytes).
+        try:
+            notes = _load_notes(self.path)
+        except MemoryNotesError:
+            return ""
         if not notes:
             return ""
         lines = [f"- [{note[_ID_KEY]}] {note[_TEXT_KEY]}" for note in notes]
