@@ -67,3 +67,5 @@ Application first. LSM second, and only on the Linux path.
 Direct answer to your question
 Focus on the rest of the application. The Docker/AppArmor/seccomp/Falco stack is not the next logical harden for PsyClaw-on-a-Mac-or-Windows-MSP-box. It is maintenance on a side path you already scoped for Linux Engine users.
 If you do one thing because of that news story: inventory every place the model can cause a network fetch, a file write, or a subprocess, and make sure none of them exist as “helpful defaults.” That is the control OpenAI did not have. Offline is the right instinct. Don’t dilute it by wrapping the trusted laptop in a Linux VM and calling that containment.
+
+^ All I know is the problem CyClaw has on my box is i need to download more ram ;) - although ill at least feel ive done all i can do if equal tasks from my cyclaw using qwen and the same pronpt to copilot desktop using qwen have similar results and cyclaw isnt 20% slower (must be dat darn python! lol) 
