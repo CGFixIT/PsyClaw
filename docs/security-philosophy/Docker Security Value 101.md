@@ -261,3 +261,13 @@ If you do one thing because of that news story: inventory every place the model 
 | `deploy/seccomp/README.md` | Builtin enforced; custom profile not generated |
 | `deploy/falco/README.md` | Opt-in detection sidecar |
 | `deploy/apparmor/README.md` | Opt-in Stage 4 profile |
+
+<hr>
+
+> 9.3.2026
+
+<hr>
+
+https://www.minimus.io/post/chainguard-alternatives-hardened-image-providers
+
+^lolz too many things but might as well read more about it since its like an inverse oof lanchain but a container at least at surface read
