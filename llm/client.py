@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
-from utils.config_validation import resolve_reasoning_effort
+from utils.config_validation import resolve_grok_reasoning_effort, resolve_reasoning_effort
 from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError, RAGError
 from utils.spend import record_external_usage
 
@@ -782,6 +782,8 @@ class GrokClient:
         self.max_tokens = grok_cfg["max_tokens"]
         self.temperature = grok_cfg["temperature"]
         self.timeout = grok_cfg["timeout_sec"]
+        # Fail closed to "low": omitted on the wire is vendor "high" (billable).
+        self.reasoning_effort = resolve_grok_reasoning_effort(grok_cfg)
         self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(grok_cfg)
         # Strip so whitespace-only counts as missing and padded values don't leak into the auth header.
         self.api_key = (os.environ.get("GROK_API_KEY") or "").strip()
@@ -812,8 +814,9 @@ class GrokClient:
                 json={
                     "model": self.model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": self.max_tokens,
-                    "temperature": self.temperature
+                    "max_completion_tokens": self.max_tokens,
+                    "temperature": self.temperature,
+                    "reasoning_effort": self.reasoning_effort,
                 },
             )
 

@@ -63,6 +63,17 @@ _RATES: dict[str, dict[str, float]] = {
         "long_output": 5.00,
         "long_prompt_threshold": 200_000.0,
     },
+    # grok-4.6 flagship (verified 2026-09-02). Same $2/$6 short band as grok-4.5;
+    # official cached input is $0.50, not grok-4.5's $0.30.
+    "grok-4.6": {
+        "input": 2.00,
+        "output": 6.00,
+        "cached_input": 0.50,
+        "long_input": 4.00,
+        "long_cached_input": 1.00,
+        "long_output": 12.00,
+        "long_prompt_threshold": 200_000.0,
+    },
 }
 
 # When each row above was last checked against its vendor pricing page. Kept as
@@ -74,6 +85,7 @@ _RATE_VERIFIED: dict[str, str] = {
     "grok-4.5": "2026-08-19",
     "claude-sonnet-5": "2026-08-19",
     "grok-4.3": "2026-08-27",
+    "grok-4.6": "2026-09-02",
 }
 
 # The OLDEST verified date above -- deliberately the oldest, not the most

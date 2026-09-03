@@ -27,7 +27,7 @@ from llm.client import (
     reset_local_backend_cache,
     resolve_local_backend,
 )
-from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError
+from utils.errors import ClaudeServiceError, ConfigError, GrokServiceError, LLMServiceError
 from utils.logger import hash_query
 
 _URL = "http://127.0.0.1:1234/v1/chat/completions"  # DevSkim: ignore DS162092,DS137138 - loopback test URL
@@ -432,9 +432,26 @@ class TestGrokClient:
         client._client.post = fake
         client.generate("a prompt")
         _url, kwargs = fake.calls[0]
-        assert kwargs["json"]["model"] == "grok-4.5"
-        assert kwargs["json"]["messages"][0]["content"] == "a prompt"
+        body = kwargs["json"]
+        assert body["model"] == "grok-4.5"
+        assert body["messages"][0]["content"] == "a prompt"
+        assert body["max_completion_tokens"] == 256
+        assert body["reasoning_effort"] == "low"
+        assert "max_tokens" not in body
         client.close()
+
+    def test_generate_rejects_none_and_xhigh_reasoning_effort(self):
+        grok = {
+            "base_url": "https://api.x.ai/v1",
+            "model": "grok-4.5",
+            "max_tokens": 256,
+            "temperature": 0.2,
+            "timeout_sec": 5,
+        }
+        for bad in ("none", "xhigh"):
+            with pytest.raises(ConfigError) as exc:
+                GrokClient(cfg={"models": {"grok": {**grok, "reasoning_effort": bad}}})
+            assert "models.grok.reasoning_effort" in str(exc.value)
 
     def test_generate_success_strips_env_key_before_bearer(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GROK_API_KEY", "  xai-secret \n")

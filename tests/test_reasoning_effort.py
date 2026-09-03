@@ -36,6 +36,7 @@ from harness.ollama import HarnessChatClient
 from harness.server import create_app
 from llm.client import LocalLLMClient, reset_local_backend_cache, resolve_local_backend
 from utils.config_validation import (
+    resolve_grok_reasoning_effort,
     resolve_reasoning_effort,
     validate_local_llm_reasoning_effort,
 )
@@ -120,6 +121,30 @@ class TestReasoningEffortConfig:
         # The whole point of the setting: it is the local (Qwen) model's block.
         assert local_llm["model"] == "qwen3.8:27b-mlx"
         validate_local_llm_reasoning_effort(shipped)  # must not raise
+
+
+class TestGrokReasoningEffortConfig:
+    @pytest.mark.parametrize("value", ["low", "medium", "high"])
+    def test_every_documented_value_is_accepted(self, value):
+        assert resolve_grok_reasoning_effort({"reasoning_effort": value}) == value
+
+    def test_absent_or_blank_defaults_to_low_not_vendor_high(self):
+        assert resolve_grok_reasoning_effort({}) == "low"
+        assert resolve_grok_reasoning_effort({"reasoning_effort": "  "}) == "low"
+
+    @pytest.mark.parametrize("bad", ["none", "xhigh", "max", "disabled"])
+    def test_ollama_only_and_grok46_only_values_raise(self, bad):
+        with pytest.raises(ConfigError) as exc:
+            resolve_grok_reasoning_effort({"reasoning_effort": bad})
+        assert "models.grok.reasoning_effort" in str(exc.value)
+
+    def test_shipped_config_pins_low_on_grok45(self):
+        with open(_SHIPPED_CONFIG, encoding="utf-8") as f:
+            shipped = yaml.safe_load(f)
+        grok = shipped["models"]["grok"]
+        assert grok["model"] == "grok-4.5"
+        assert grok["reasoning_effort"] == "low"
+        assert resolve_grok_reasoning_effort(grok) == "low"
 
 
 # =============================================================================
@@ -336,7 +361,7 @@ class TestProviderIsolation:
 
 
 class TestCloudPayloadsUnchanged:
-    """Grok and Claude must not gain either Ollama-only field."""
+    """Claude stays Ollama-field-free; Grok sends xAI reasoning_effort, never think/none."""
 
     def _cloud_cfg(self, tmp_path) -> str:
         cfg = {
@@ -373,31 +398,48 @@ class TestCloudPayloadsUnchanged:
             yaml.dump(cfg, f)
         return str(path)
 
-    @pytest.mark.parametrize("client_name", ["grok", "claude"])
-    def test_cloud_client_payload_has_neither_field(self, tmp_path, monkeypatch, client_name):
-        from llm.client import ClaudeClient, GrokClient
+    def test_claude_payload_has_neither_ollama_field(self, tmp_path, monkeypatch):
+        from llm.client import ClaudeClient
 
-        monkeypatch.setenv("GROK_API_KEY", "dummy")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy")
-        path = self._cloud_cfg(tmp_path)
-        client = GrokClient(path) if client_name == "grok" else ClaudeClient(path)
-
+        client = ClaudeClient(self._cloud_cfg(tmp_path))
         sent: list[dict] = []
 
         def fake_post(url, **kwargs):
             sent.append(kwargs["json"])
-            payload = (
-                {"content": [{"type": "text", "text": "ok"}]}
-                if client_name == "claude"
-                else {"choices": [{"message": {"content": "ok"}}]}
+            return httpx.Response(
+                200,
+                json={"content": [{"type": "text", "text": "ok"}]},
+                request=httpx.Request("POST", url),
             )
-            return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
 
         client._client.post = fake_post
         client.generate("hello")
         client.close()
-
         assert "reasoning_effort" not in sent[0]
+        assert "think" not in sent[0]
+
+    def test_grok_payload_sends_low_reasoning_effort_not_think(self, tmp_path, monkeypatch):
+        from llm.client import GrokClient
+
+        monkeypatch.setenv("GROK_API_KEY", "dummy")
+        client = GrokClient(self._cloud_cfg(tmp_path))
+        sent: list[dict] = []
+
+        def fake_post(url, **kwargs):
+            sent.append(kwargs["json"])
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}}]},
+                request=httpx.Request("POST", url),
+            )
+
+        client._client.post = fake_post
+        client.generate("hello")
+        client.close()
+        assert sent[0]["reasoning_effort"] == "low"
+        assert sent[0]["max_completion_tokens"] == 256
+        assert "max_tokens" not in sent[0]
         assert "think" not in sent[0]
 
 

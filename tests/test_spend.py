@@ -527,6 +527,46 @@ def test_estimate_usd_grok43_long_context_band() -> None:
     assert priced["usd"] == pytest.approx(200_000 * 2.50 / 1_000_000 + 100_000 * 5.00 / 1_000_000)
 
 
+def test_estimate_usd_prices_grok46() -> None:
+    """Operator-pinned grok-4.6 must not price as rate_unknown."""
+    tokens = spend.parse_grok_usage({"prompt_tokens": 100_000, "completion_tokens": 100_000})
+    priced = spend.estimate_usd("grok-4.6", tokens)
+    assert priced["rate_unknown"] is False
+    assert priced["usd"] == pytest.approx(100_000 * 2.00 / 1_000_000 + 100_000 * 6.00 / 1_000_000)
+    assert priced["usd_source"] == "rate_table"
+
+
+def test_estimate_usd_grok46_cached_and_long_band() -> None:
+    """Official grok-4.6 cached input is $0.50, long cached $1.00, threshold 200k."""
+    row = spend._RATES["grok-4.6"]
+    assert row["cached_input"] == 0.50
+    assert row["long_cached_input"] == 1.00
+    assert row["long_input"] == 4.00
+    assert row["long_output"] == 12.00
+    assert row["long_prompt_threshold"] == 200_000.0
+    assert spend._RATE_VERIFIED["grok-4.6"] == "2026-09-02"
+
+    short = {
+        "input_tokens": 10_000,
+        "output_tokens": 0,
+        "cached_input_tokens": 10_000,
+        "reasoning_tokens": 0,
+    }
+    assert spend.estimate_usd("grok-4.6", short)["usd"] == pytest.approx(10_000 * 0.50 / 1_000_000)
+
+    long = {
+        "input_tokens": 200_000,
+        "output_tokens": 100_000,
+        "cached_input_tokens": 50_000,
+        "reasoning_tokens": 0,
+    }
+    priced = spend.estimate_usd("grok-4.6", long)
+    uncached = 150_000
+    assert priced["usd"] == pytest.approx(
+        uncached * 4.00 / 1_000_000 + 50_000 * 1.00 / 1_000_000 + 100_000 * 12.00 / 1_000_000
+    )
+
+
 def test_record_persists_served_model_when_given(tmp_path: Path) -> None:
     ledger = tmp_path / "spend.jsonl"
     spend.record_external_usage(
