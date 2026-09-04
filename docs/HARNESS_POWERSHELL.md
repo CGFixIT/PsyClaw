@@ -236,7 +236,12 @@ read-only.
   `cyclaw/`, `agent/`, plus any `CYCLAW_AGENT_BRANCH_PREFIX` override — validated
   against `utils/agent_identity.BRANCH_NAME_RE`.
 - A named-capability **ToolBroker** gate (`utils.tool_broker.assert_allowed`) sits
-  inside `/api/chat` when `loop: true`, inside the agent-run route, and inside `/web`
-  fetches. A denied capability is `403 TOOL_DENIED` and is audited. It is independent
-  of the API key and the CSRF check — passing those does not pass this.
+  inside `/api/chat` when `loop: true`, inside the agent-run route, and inside
+  `/api/web/fetch` and `/api/web/search`. It is independent of the API key and
+  the CSRF check — passing those does not pass this. The error contract differs
+  by route: loop-chat and the agent-run route surface a denial as `403
+  TOOL_DENIED`, while `harness/web_search.py`'s `WebTool._gate_tool` wraps the
+  same `ToolDenied` into `WebToolError(code="WEB_TOOL_DENIED")`, which
+  `harness/server.py`'s `_web_err` maps to `400` (its default status) — not
+  `403`. Every denial is audited regardless of status code.
 - The console renders all model output via `textContent` (no HTML injection).
