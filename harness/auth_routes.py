@@ -48,6 +48,9 @@ def register_auth_routes(
     # harness.server has finished importing this module.
     from harness import server as hs
 
+    # rate_limit_only remains in the signature because create_app still
+    # injects it; setup-status now uses auth_open (#1298 N10).
+
     def _require_harness_auth():
         if harness_auth is None:
             raise HTTPException(
@@ -101,7 +104,7 @@ def register_auth_routes(
             "locked": account.locked_until_ts is not None,
         }
 
-    @app.get("/api/auth/setup-status", dependencies=rate_limit_only)
+    @app.get("/api/auth/setup-status", dependencies=auth_open)
     def harness_setup_status() -> AuthSetupStatusResponse:
         manager = _require_harness_auth()
         pending = manager.needs_password_setup()

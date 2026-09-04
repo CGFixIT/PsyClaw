@@ -397,7 +397,10 @@ def register_auth_routes(
     def _looks_proxied(request: Request) -> bool:
         return any(header in request.headers for header in _FORWARDING_HEADERS)
 
-    @app.get("/auth/setup-status", dependencies=[Depends(enforce_rate_limit)])
+    @app.get(
+        "/auth/setup-status",
+        dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)],
+    )
     async def auth_setup_status() -> AuthSetupStatusResponse:
         manager = _require_enabled()
         pending = await asyncio.to_thread(manager.needs_password_setup)

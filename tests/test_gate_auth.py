@@ -119,6 +119,32 @@ class TestBootstrapPassword:
         assert body["needs_password"] is True
         assert body["username"] == "admin"
 
+    def test_setup_status_cross_site_is_rejected(self, manager):
+        manager.bootstrap_if_empty()
+        r = _client(manager).get(
+            "/auth/setup-status", headers={"sec-fetch-site": "cross-site"}
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    @pytest.mark.parametrize(
+        "origin",
+        ["http://localhost", "http://127.0.0.1"],
+    )
+    def test_setup_status_portless_origin_is_rejected(self, manager, origin):
+        """Implicit :80 is a different origin from the console on :8787 (#1298 N10)."""
+        manager.bootstrap_if_empty()
+        r = _client(manager).get("/auth/setup-status", headers={"origin": origin})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+    def test_setup_status_same_origin_is_allowed(self, manager):
+        manager.bootstrap_if_empty()
+        r = _client(manager).get(
+            "/auth/setup-status", headers={"origin": _SAME_ORIGIN}
+        )
+        assert r.status_code == 200
+
     def test_loopback_can_set_password(self, manager):
         manager.bootstrap_if_empty()
         app = _make_app(manager)
