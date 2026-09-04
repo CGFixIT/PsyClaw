@@ -162,7 +162,7 @@ jobs:
 
       - name: Run pip-audit (ignore only mitigated chromadb + nltk CVEs)
         run: |
-          pip-audit -r requirements.txt -r requirements-test.txt --ignore-vuln CVE-2026-45829 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
+          pip-audit -r requirements.txt -r requirements-test.txt --ignore-vuln CVE-2026-45829 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3740 --ignore-vuln PYSEC-2026-3447
         # CVE-2026-45829 (Critical pre-auth RCE) — risk accepted under v1.4.0 invariants.
         # Actual controls:
         #   - chromadb.PersistentClient (local embedded mode, path from config.yaml["indexing"]["chroma_path"])
@@ -202,6 +202,16 @@ jobs:
         # live in code this repo never executes. stemmer.py's own header comment
         # already documents this: "the NLTK URL-encoded path-traversal CVE (punkt
         # tokenizer) is not reachable." Re-evaluate when a patched release ships.
+        #
+        # PYSEC-2026-3740 (nltk, alias CVE-2026-81726 / GHSA-8mgp-746c-j5xp) —
+        # added 2026-09-04 after pip-audit on main went red on 2026-09-03
+        # (run 33722097917) and again on #1306 (runs 33828980264, 33829017851).
+        # pip-audit prints this PYSEC id with no Fix Versions against nltk 3.10.3
+        # (current latest). The advisory is a pathsec bypass in unused
+        # model-artifact APIs (TransitionParser.train/parse,
+        # AveragedPerceptron.save/load, PerceptronTagger.save_to_json,
+        # save_maxent_params). CyClaw still only imports PorterStemmer.
+        # Drop this ignore on the next nltk release that patches it.
         #
         # (This step audits requirements.txt + requirements-test.txt, which
         # together cover base runtime + test tools and carry ZERO extras. Every
