@@ -64,6 +64,17 @@ print(sum(
 ))
 ")
 stale_node_count=$((real_node_count + 1))
+
+# Same guaranteed-stale derivation for D4: no test here ever planted a
+# banned_patterns claim, so deleting D4 entirely still left this self-test
+# reporting PASS (Codex P2 on PR #1308).
+real_pattern_count=$("$PY" -c "
+import yaml
+cfg = yaml.safe_load(open('$repo_root/config.yaml', encoding='utf-8'))
+print(len(cfg['policy']['prompt_filter']['banned_patterns']))
+")
+stale_pattern_count=$((real_pattern_count + 1))
+
 mkdir -p "$tmp/.claude" "$tmp/harness"
 cp "$repo_root"/.claude/settings.json "$tmp/.claude/"
 cp -r "$repo_root"/.claude/skills "$tmp/.claude/"
@@ -75,7 +86,7 @@ done
 # without ever planting a stale claim against it meant this self-test never
 # exercised D8 at all. Confirmed by Codex reviewing PR #1308: deleting the entire
 # D8 block from doc_sync.py still left this self-test reporting PASS, exit 0.
-printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a %s-node topology.\n\nThe stop hook blocks force-push, if applied by the session runtime.\n' "$stale_node_count" > "$tmp/CLAUDE.md"
+printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a %s-node topology.\n\nThe sanitizer enforces %s banned_patterns.\n\nThe stop hook blocks force-push, if applied by the session runtime.\n' "$stale_node_count" "$stale_pattern_count" > "$tmp/CLAUDE.md"
 mkdir -p "$tmp/.claude/rules"
 printf 'The stop hook blocks --force-with-lease.\n' > "$tmp/.claude/rules/PROJECT_RULES.md"
 # setup-guide.md claiming a route that does not exist => the OTHER direction of
@@ -119,6 +130,12 @@ fi
 # (copied from the real repo above) that has 12 add_node() calls.
 if ! grep -qF "DRIFT [D8]" "$stub_out"; then
   echo "detection self-test: FAIL — D8 node-count drift not detected" >&2
+  cat "$stub_out" >&2; exit 1
+fi
+# D4's own positive case: the stub CLAUDE.md's "banned_patterns" claim is
+# guaranteed one more than the real config.yaml count.
+if ! grep -qF "DRIFT [D4]" "$stub_out"; then
+  echo "detection self-test: FAIL — D4 banned-pattern-count drift not detected" >&2
   cat "$stub_out" >&2; exit 1
 fi
 # D6's own positive+negative case: the planted PROJECT_RULES.md sentence

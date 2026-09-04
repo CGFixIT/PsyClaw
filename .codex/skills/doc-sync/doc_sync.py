@@ -61,18 +61,21 @@ def _agent_scan_excluded(rel_path: str) -> bool:
     return any(rel_path == p or rel_path.startswith(p + "/") for p in _AGENT_SCAN_EXCLUDE)
 
 
-_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.|\|)")
 
 
 def _claim_unit_bounds(text: str) -> list[tuple[int, int]]:
     """Exact (start, end) spans of the "claim unit" each position in `text`
-    belongs to: a blank-line-delimited paragraph, further split into list
-    items when the paragraph is a list (two or more marker lines) with no
-    blank line separating them -- adjacent, unrelated bullets otherwise share
-    one paragraph span and wrongly inherit each other's context (Codex P2 on
-    PR #1308, D4's third false positive in as many rounds). re.split() loses
-    each separator's real length, so spans are walked from the separator
-    matches directly rather than reconstructed from split() output.
+    belongs to: a blank-line-delimited paragraph, further split into
+    one-line items when the paragraph is a list or a Markdown table (two or
+    more marker lines -- a bullet marker or a leading `|`) with no blank line
+    separating them -- adjacent, unrelated bullets or table rows otherwise
+    share one paragraph span and wrongly inherit each other's context (Codex
+    P2 on PR #1308: first bullets, now table rows -- "| Sanitizer enabled |
+    yes |" and an unrelated "| filename limit | 99 patterns |" with no blank
+    line between them). re.split() loses each separator's real length, so
+    spans are walked from the separator matches directly rather than
+    reconstructed from split() output.
     """
     bounds: list[tuple[int, int]] = []
     pos = 0
@@ -442,9 +445,17 @@ def main(argv: list[str] | None = None) -> int:
     # near the phrase, which is what actually distinguishes a claim of
     # enforcement ("the stop hook blocks...", "...the stop hook requires...")
     # from prose that merely mentions or denies one.
+    # Verb list widened once for passive/synonymous enforcement forms found
+    # live ("Force pushes are blocked by the stop hook", "The stop hook
+    # demands a pinned identity") -- "blocked" (past participle, missed by
+    # "blocks?") and "demands?" (a synonym the original five verbs didn't
+    # cover). Not chasing every further synonym: this is a bounded,
+    # documented vocabulary, not an attempt at general enforcement-language
+    # detection.
+    _CONTROL_VERBS = r"blocks?|blocked|enforces?|enforced|requires?|required|prevents?|prevented|rejects?|rejected|demands?"
     _stop_hook_claim = re.compile(
-        r"stop[- ]hook\W+(?:\w+\W+){0,6}?(?:blocks?|enforces?|requires?|prevents?|rejects?)"
-        r"|(?:blocks?|enforces?|requires?|prevents?|rejects?)(?:\W+\w+){0,6}?\W+stop[- ]hook",
+        rf"stop[- ]hook\W+(?:\w+\W+){{0,6}}?(?:{_CONTROL_VERBS})"
+        rf"|(?:{_CONTROL_VERBS})(?:\W+\w+){{0,6}}?\W+stop[- ]hook",
         re.I,
     )
     hook_docs = {"CLAUDE.md": claude}
