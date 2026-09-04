@@ -212,6 +212,24 @@ def test_whoami_success_stores_rotated_csrf():
     assert "fetchWithTimeout(`${API}/auth/whoami`, { cache: 'no-store' }, 5000)" in js
 
 
+def test_logout_honors_non_ok_http_status():
+    """A failed logout must not clear csrfToken then ask whoami.
+
+    Issue #1298 N4: the terminal always nulled csrfToken after the fetch,
+    even on 401/403. whoami then painted logged-in with a dead CSRF.
+    Harness already checks response.ok; this is the terminal path.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function logout(", 1)
+    assert len(body) == 2, "logout is no longer declared as expected; update this test"
+    after = body[1].split("async function fetchWithTimeout(", 1)[0]
+    assert "if (!response.ok)" in after, "logout must refuse to proceed on a non-2xx"
+    assert after.index("if (!response.ok)") < after.index("csrfToken = null"), (
+        "logout must keep csrfToken when the server rejected the request"
+    )
+    assert "return;" in after.split("if (!response.ok)", 1)[1].split("csrfToken = null", 1)[0]
+
+
 def test_login_form_controls_exist():
     html = _console_source()
     for marker in (

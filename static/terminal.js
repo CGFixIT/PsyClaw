@@ -221,7 +221,16 @@ async function logout() {
   const headers = { 'Content-Type': 'application/json' };
   if (csrfToken) headers['X-CyClaw-CSRF'] = csrfToken;
   try {
-    await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+    const response = await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+    if (!response.ok) {
+      // Keep csrfToken: a 401/403 did not revoke the session. Clearing it
+      // here made whoami look logged-in with a null CSRF (Users writes 403).
+      if (authStatus) {
+        if (authSessionBox) authSessionBox.hidden = false;
+        authStatus.textContent = 'logout rejected (' + response.status + ')';
+      }
+      return;
+    }
   } catch (e) {
     // Best-effort: the server may already be unreachable.
   }
