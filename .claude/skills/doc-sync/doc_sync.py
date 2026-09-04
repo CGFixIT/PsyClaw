@@ -255,9 +255,26 @@ def main(argv: list[str] | None = None) -> int:
     # "banned_pattern(s)" (unambiguous on its own) OR sit near a sanitizer/
     # injection-filter context word on the same line.
     _pattern_context = re.compile(r"banned|sanitiz|injection", re.I)
-    _PATTERN_CONTEXT_WINDOW_CHARS = 60
     drift_files = []
     for name, text in cite_files.items():
+        # Paragraph-bounded, not a flat character window: a window wide
+        # enough to survive a hard-wrapped line ("Sanitizer protection
+        # includes\n99 patterns.") is also wide enough to cross a paragraph
+        # break into unrelated prose ("See sanitizer notes.\n\n17 patterns
+        # for filenames.") and wrongly borrow its context word (Codex P2 on
+        # PR #1308, found immediately after the same window was added to fix
+        # the wrapped-line case). A blank-line-delimited paragraph is the
+        # right unit: it survives a soft wrap but stops at a real topic break.
+        # Paragraph spans as exact (start, end) positions -- re.split() loses
+        # each separator's real length (one blank line vs several), so
+        # reconstructing offsets from split() output is unreliable. Walking
+        # the separator matches directly keeps them exact.
+        para_bounds = []
+        pos = 0
+        for sep in re.finditer(r"\n\s*\n", text):
+            para_bounds.append((pos, sep.start()))
+            pos = sep.end()
+        para_bounds.append((pos, len(text)))
         for m in re.finditer(r"(\d+)[\s-]+(?:(banned_)?pattern)", text):
             claimed = int(m.group(1))
             if claimed == real_n or claimed <= 5:  # ignore small unrelated numbers
@@ -265,15 +282,11 @@ def main(argv: list[str] | None = None) -> int:
             if m.group(2):  # explicit "banned_pattern(s)" spelling, unambiguous
                 drift_files.append(f"{name} claims {claimed}")
                 continue
-            # A bounded character window, not just the physical line: hard-
-            # wrapped Markdown routinely puts the context word and the count
-            # on adjacent lines ("Sanitizer protection includes\n99
-            # patterns."), which a same-line-only check missed entirely
-            # (Codex P2 on PR #1308).
-            lo = max(0, m.start() - _PATTERN_CONTEXT_WINDOW_CHARS)
-            hi = min(len(text), m.end() + _PATTERN_CONTEXT_WINDOW_CHARS)
-            if _pattern_context.search(text[lo:hi]):
-                drift_files.append(f"{name} claims {claimed}")
+            for start, end in para_bounds:
+                if start <= m.start() < end:
+                    if _pattern_context.search(text[start:end]):
+                        drift_files.append(f"{name} claims {claimed}")
+                    break
     if not drift_files:
         ok("D4", f"banned_patterns count {real_n} consistent everywhere it's cited")
     else:
