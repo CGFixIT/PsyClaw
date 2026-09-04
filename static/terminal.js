@@ -221,7 +221,23 @@ async function logout() {
   const headers = { 'Content-Type': 'application/json' };
   if (csrfToken) headers['X-CyClaw-CSRF'] = csrfToken;
   try {
-    await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+    const response = await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+    if (!response.ok) {
+      // Do not clear CSRF before whoami: that painted logged-in with a
+      // dead token (Users writes 403). On 401/403 the header is already
+      // rejected (rotated in another tab, or no session); whoami rotates
+      // cookie-session CSRF and returns the new plaintext so retries
+      // and Users writes can succeed.
+      const rejected = 'logout rejected (' + response.status + ')';
+      if (response.status === 401 || response.status === 403) {
+        await refreshAuthUi();
+      }
+      if (authStatus) {
+        if (csrfToken && authSessionBox) authSessionBox.hidden = false;
+        authStatus.textContent = rejected;
+      }
+      return;
+    }
   } catch (e) {
     // Best-effort: the server may already be unreachable.
   }
@@ -725,8 +741,13 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null, confir
   // global. Guarding the funnel — not just the key handler — also covers the
   // case where Enter starts query #2 while an earlier confirm prompt is still
   // on screen and clickable. Returning before the input is cleared keeps the
-  // operator's typed text.
-  if (sendBtn.disabled) return;
+  // operator's typed text. A confirm click that hits this guard must still
+  // drop the stored query (#1298 N1); otherwise the next confirm for that id
+  // can replay it after this send finishes.
+  if (sendBtn.disabled) {
+    if (confirmedOnline !== null && confirmEntryId) pendingConfirmById.delete(confirmEntryId);
+    return;
+  }
 
   const query = confirmedOnline !== null ? pendingConfirmById.get(confirmEntryId) : input.value.trim();
   if (confirmedOnline !== null) pendingConfirmById.delete(confirmEntryId);
