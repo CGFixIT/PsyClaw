@@ -74,11 +74,9 @@ landed — kept here so the wiring stays reviewable in one place:
 }
 ```
 
-> **Historical note (pre-2026-09-04):** shipping an active `settings.json` was
-> intentionally left to the human rather than something a PR turned on silently.
-> That is what happened — the operator explicitly directed the wiring in session,
-> not a PR landing it unasked. Both halves (read-only allowlist + advisory hook)
-> were non-destructive either way.
+> **History:** the script sat on disk unregistered until 2026-09-04. It is now
+> a `SessionStart` hook (this section). Do not append `|| true` to the command —
+> the script already exits 0, and that idiom hid the previous dangling hook.
 
 ---
 
