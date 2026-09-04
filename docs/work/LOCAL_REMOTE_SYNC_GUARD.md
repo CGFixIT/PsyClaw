@@ -74,10 +74,11 @@ landed — kept here so the wiring stays reviewable in one place:
 }
 ```
 
-> Shipping an active `settings.json` is intentionally **left to the human**: it
-> registers an auto-running hook and grants standing permissions, which should be
-> a deliberate opt-in rather than something a PR turns on silently. The two
-> halves (read-only allowlist + advisory hook) are both non-destructive.
+> **Historical note (pre-2026-09-04):** shipping an active `settings.json` was
+> intentionally left to the human rather than something a PR turned on silently.
+> That is what happened — the operator explicitly directed the wiring in session,
+> not a PR landing it unasked. Both halves (read-only allowlist + advisory hook)
+> were non-destructive either way.
 
 ---
 
