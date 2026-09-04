@@ -95,6 +95,13 @@ def _add_paragraph_units(text: str, start: int, end: int, bounds: list[tuple[int
         line_offsets.append(pos)
         pos += len(line) + 1
     marker_offsets = [line_offsets[i] for i in marker_idxs]
+    # Introductory prose before the first marker ("CyClaw graph has 99
+    # nodes:\n- retrieve first\n- audit last") was silently dropped -- the
+    # loop below only ever started at marker_offsets[0], so a claim sitting
+    # in a list's own preamble had no unit at all and neither D4 nor D8
+    # could ever see it (Codex P2 on PR #1308). Give it its own unit.
+    if marker_offsets[0] > start:
+        bounds.append((start, marker_offsets[0]))
     for i, mo in enumerate(marker_offsets):
         item_end = marker_offsets[i + 1] if i + 1 < len(marker_offsets) else end
         bounds.append((mo, item_end))
@@ -626,7 +633,7 @@ def main(argv: list[str] | None = None) -> int:
         node_drift = []
         for name, text in node_files.items():
             unit_bounds = _claim_unit_bounds(text)
-            for m in re.finditer(r"(~\s?)?(\d+)[\s-]+nodes?\b", text):
+            for m in re.finditer(r"(~\s?)?(\d+)[\s-]+nodes?\b", text, re.I):
                 # A leading "~" is generic sizing advice ("avoid monolithic
                 # graphs beyond ~10 nodes"), not a claim about CyClaw's own
                 # topology -- python-coding-agent/SKILL.md:241 triggered a
