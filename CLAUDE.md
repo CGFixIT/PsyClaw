@@ -126,9 +126,10 @@ The four `/ops/*` endpoints reach out-of-band subsystems ONLY through
 subsystems.
 
 Every route marked **API key** above — plus the harness console's 29
-`guarded` routes (`harness/server.py`, including `/api/agent/run`/`push`/
-`publish`) — is gated by `require_api_key` (two independent implementations,
-one per app; see `utils/auth.py`'s module docstring for why). `config.yaml`'s
+`guarded` routes (23 in `harness/server.py`, the other 6 in
+`harness/agent_routes.py`, which owns `/api/agent/run`/`push`/`publish`) —
+is gated by `require_api_key` (two independent implementations, one per
+app; see `utils/auth.py`'s module docstring for why). `config.yaml`'s
 `security.api_key_optional` (default `false`) is the one deliberate bypass. It
 does **not** touch the separate session/RBAC `/auth/*` system below, which
 stays governed by `auth.enabled` regardless. Two controls bound it:
@@ -180,7 +181,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `utils/telemetry_kill.py` | The canonical maps — `TELEMETRY_KILL` (21 telemetry pairs), a visibly-separate `UPDATE_CHECK_OPT_OUT` (4 ancillary pairs), and `SCRUBBED_ENV_KEYS` (5 tracing credentials + the 2 declarative-OTel config names, removed outright) — plus `apply_telemetry_kill()`, the pure child builder `build_telemetry_safe_env(base)`, `scheduler_env_overlay()` for generated jobs, and the launcher CLI `python -m utils.telemetry_kill --export {shell,powershell}`. Applied at import by every maintained chokepoint (invariant-guard G1 pins 15 orderings) and delivered as literal env by Docker/launchers/generators. Stdlib-only on purpose — it loads ahead of everything heavy; the ONNX API half deliberately lives in `utils/onnx_telemetry.py` instead. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `utils/onnx_telemetry.py` | `suppress_onnx_telemetry()` — the post-import ONNX Runtime API suppression (`disable_telemetry_events()`), getattr-guarded, idempotent, absent-safe; called at the two load seams (`retrieval/vector_store.py`, `guardrails/integration.py` with `force_import=True` before `LLMRails`). Env half (`ORT_DISABLE_TELEMETRY=1`) rides the kill map |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
-| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; Stage 3 attaches `require_session_or_token` to `/query` by name (`_AUTH_DEPENDENCY_NAME`) only when `auth_manager` is not None |
+| `gate_auth.py` | The `/auth/*` endpoint set — Stage 2's login/logout/whoami plus the RBAC/admin routes it has since grown (`docs/AUTHENTICATION_DESIGN.md`; the full list is in the route table above) — registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; Stage 3 attaches `require_session_or_token` to `/query` by name (`_AUTH_DEPENDENCY_NAME`) only when `auth_manager` is not None |
 | `gate_memory.py` | Optional default-off memory admin surface (`/memory/*` + `/query/export/html`), registered onto gate.py's app the same way `gate_ops.py`/`gate_auth.py` register their routes. Lazy-imports package `memory` only inside handlers; never OOB. See `docs/memory/README.md` |
 | `memory/` | Optional facts + episodes SQLite+FTS5 store with propose/apply governance and optional retrieval fusion (all switches false in shipped `config.yaml`) |
 | `graph.py` | 12-node LangGraph topology; all security policy lives in the edges |
@@ -756,10 +757,12 @@ python3 .claude/skills/injection-redteam/redteam.py
 
 CI target is Python 3.12 on a three-OS matrix (ubuntu + windows + macos); all
 three `test` legs are release gates (a failing Windows result is not masked).
-The blocking gates are the three `test` legs, `invariant-guard`, and
-packaging; advisory (`continue-on-error`) lanes include the `verify-skills`
-e2e smokes, `numbat-rules.yml`, the whole `lint.yml` job, and best-effort
-steps in the nemo-guardrails/pr-review/conda/trivy workflows. Coverage sources:
+Inside `ci.yml` the only job carrying `continue-on-error` is `verify-skills`;
+every other job (including the three `test` legs, `invariant-guard`, and
+packaging) fails the workflow. Advisory lanes elsewhere are
+`numbat-rules.yml`, `lint.yml`'s broader-Ruff and WPS steps (its F/B/S gate
+blocks), and best-effort steps in the
+nemo-guardrails/pr-review/conda/trivy workflows. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
@@ -800,6 +803,13 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/karpathy-guidelines` | mode | Anti-overcomplication guardrails: surgical diffs, surfaced assumptions, verifiable success criteria |
 | `/cyclaw-advisor` | mode | "Legal" persona for privacy/DPA/DSR/breach-analysis review of CyClaw changes |
 
+### Standalone commands (no skill folder)
+
+`/audit`, `/check-soul`, `/conversation-summary`, `/run`, and `/status` are
+short inline procedures wired only as `.claude/commands/*.md`, with no
+`.claude/skills/` directory behind them — deliberate, and tracked as such in
+`.claude/README.md`. They are reachable as slash commands like any skill.
+
 ### Agent skills
 
 `/verification-specialist`, `/code-explorer`,
@@ -809,7 +819,7 @@ skills (`/memory-extraction`, `/memory-consolidation`, `/memory-orchestrator`)
 are each a `.claude/skills/*/SKILL.md` entry. `/conversation-summary` plays the
 same session-continuation role but is wired as `.claude/commands/conversation-summary.md`
 (a slash command), not a SKILL.md-backed skill — listed here for discoverability, not
-because it's a 33rd skill directory.
+because it is a skill directory.
 `/python-coding-agent` auto-loads via the SessionStart hook; its Planning Mode
 covers pre-implementation design (formerly a separate `solution-architect`
 skill, folded in since both need the same CyClaw-specific grounding).
