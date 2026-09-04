@@ -23,7 +23,7 @@ section. Then:
 | Requirement | Notes |
 |---|---|
 | Git | Any recent version |
-| Python 3.12 | Primary supported runtime (`requires-python >=3.12`) |
+| Python 3.12 | Primary supported runtime (`requires-python >=3.12,<3.13` — 3.13 is excluded; numpy 1.26.x has no cp313 wheels) |
 | [Ollama](https://ollama.com/) | Running on `http://127.0.0.1:11434`, with `qwen3.8:27b-mlx` pulled: `ollama pull qwen3.8:27b-mlx` |
 | Corpus `.md` files (optional) | The repo ships a small sample corpus in `data/corpus/`, so the indexer has something to build against out of the box. Copy your own `.md` files in to replace/extend it — from your own notes, or an existing SafeClaw/PsyClaw-style corpus if you have one. |
 | Windows | PowerShell, no admin/elevation needed. If script execution is blocked, run once: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` |
@@ -67,7 +67,7 @@ Open `http://127.0.0.1:8787` → the terminal UI loads automatically.
 .\.claude\skills\CyClaw-Sandbox\windows-smoke.ps1
 ```
 
-Runs 6 real checks (`/health`, an on-topic query, an offline-confirmation
+Runs 22 real checks — 6 against the gateway (`/health`, an on-topic query, an offline-confirmation
 gate check, an injection-blocked query, `/soul`, the terminal page) with
 explicit pass/fail output and a non-zero exit on any failure. For a single
 quick manual check instead, `tests\apipsTest.ps1` fires one `POST /query` and
@@ -189,14 +189,14 @@ it does not edit `config.yaml`.
 ### Option A — the installer script (handles the torch difference for you)
 
 `macos/install-cyclaw.sh` already branches on `uname -s` = `Darwin` and does
-the right thing (`macos/install-cyclaw.sh:124-137`):
+the right thing (`macos/install-cyclaw.sh:176-190`):
 
 ```bash
 git clone https://github.com/CGFixIT/CyClaw.git && cd CyClaw
 bash ./macos/install-cyclaw.sh
 ```
 
-It finds a Python ≥3.12, creates `~/.CyClaw/venv`, installs the correct torch
+It finds a Python 3.12.x — an existing `~/.CyClaw/venv` on any other version is refused, not replaced — creates `~/.CyClaw/venv`, installs the correct torch
 build, installs the rest from corrected manifests, writes a `cyclaw` shim, and
 adds a PATH entry plus a `cyclaw()` function to your rc file (`~/.zshrc` on
 zsh; on macOS bash it preserves the first existing login file among
@@ -218,7 +218,7 @@ Option B; it is a different target:
 |---|---|
 | Ollama install / `ollama serve` / model pull | Do [Ollama on macOS](#ollama-on-macos) yourself |
 | The retrieval index | Run `python -m retrieval.indexer` — otherwise `/query` 503s |
-| `CYCLAW_API_KEY` | Export it before launching, or the console's state-changing routes fail closed with 401. `macos/invoke-cyclaw.sh:66-68` warns about this at launch; the key is deliberately never written into the shim, since that would put a secret in a profile file on disk |
+| `CYCLAW_API_KEY` | Export it before launching, or the console's state-changing routes fail closed with 401. `macos/invoke-cyclaw.sh:165-166` warns about this at launch; the key is deliberately never written into the shim, since that would put a secret in a profile file on disk |
 | `GROK_API_KEY` | Export it (any non-empty value offline) |
 | Your own corpus | Copy `.md` files into `data/corpus/` |
 
@@ -235,7 +235,7 @@ index, and keys (table above). Option B is the by-hand core-RAG path.
 
 ```bash
 # 0. Prerequisites.
-#    Python 3.12+ — either works:
+#    Python 3.12.x exactly — 3.13 is not supported:
 #      brew install python@3.12
 #    or the official installer: https://www.python.org/downloads/macos/
 #    Ollama — see "Ollama on macOS" below; needed before step 6, not before 1.
@@ -261,7 +261,7 @@ pip install "torch==2.13.0"
 # 3. Everything else — but from copies of both manifests with the torch and
 #    PyTorch-index lines removed. Without this, pip tries to reconcile the
 #    plain torch you just installed against the "+cpu" pin those files
-#    hardcode, and the install fails. Identical to what CI's macos-latest leg
+#    hardcode, and the install fails. Mirrors what CI's macos-latest leg
 #    runs (.github/workflows/ci.yml:332-333).
 grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
     requirements.txt > /tmp/requirements-macos.txt
@@ -336,7 +336,7 @@ Three things about the harness command that differ from the gateway:
   install above installs `requirements.txt`, which is a third-party pin list
   with no self-install line — so after following this guide exactly,
   `cyclaw-harness` is `command not found`. The `-m` form always works and is
-  what both shipped launchers use (`macos/invoke-cyclaw.sh:87`,
+  what both shipped launchers use (`macos/invoke-cyclaw.sh:258`,
   `powershell/Invoke-CyClaw.ps1:78`). If you want the short names, add
   `pip install -e . -c constraints.txt` after step 3. The same applies to
   `cyclaw-server`, `cyclaw-index`, `cyclaw-mcp`, `cyclaw-metrics`, and
@@ -442,8 +442,8 @@ AUTH="Authorization: Bearer $CYCLAW_API_KEY"
 |---|---|---|
 | `/` | GET | serves `static/terminal.html` — the browser console |
 | `/static/*` | GET | static assets for that page |
-| `/health` | GET | readiness: per-service status, `index_ready`, `graph_ready`, `mode` |
-| `/query` | POST | the RAG request path — rate-limited (60/min per IP), sanitized. When `auth.enabled` is true, also requires a session cookie or `Authorization: Bearer <device-token>` |
+| `/health` | GET | readiness: `status` (`ok`/`degraded` — never "healthy"), per-service status, `index_ready`, `graph_ready`, `mode`, `version`, `corpus_path`, and the `graph_timeout_sec` / `ops_sync_timeout_sec` budgets the console uses to bound its own fetches |
+| `/query` | POST | the RAG request path — rate-limited (60/min per IP), sanitized. **Same-origin always:** a cross-site `Origin`/`Sec-Fetch-Site` is refused `403 CROSS_SITE_BLOCKED` regardless of `auth.enabled`, while a request carrying neither header is allowed (curl, MCP). When `auth.enabled` is true, also requires a session cookie or `Authorization: Bearer <device-token>`, and the `audit` role is refused `403 AUTH_ROLE_DENIED` |
 | `/index/build` | POST | first-run: build the search index from `corpus.path`. Loopback peer + same-origin only; 409 while a build is running |
 | `/index/status` | GET | progress of the current or last build — always 200 |
 
@@ -500,16 +500,16 @@ device token (the console login form, or `cyclaw-user token create`).
 | `/auth/bootstrap-password` | POST | first admin password; loopback peer + same-origin only, no reverse-proxy forwarding headers; 403 off-box or when proxied; 409 once set; 503 when auth off |
 | `/auth/login` | POST | `{"username", "password"}` → sets an `HttpOnly` session cookie and returns a CSRF token |
 | `/auth/logout` | POST | requires the session cookie **and** the CSRF token in an `X-CyClaw-CSRF` header; revokes the session |
-| `/auth/whoami` | GET | returns the current username, via either the session cookie or an `Authorization: Bearer <device-token>` header |
-| `/auth/users` | GET | list users (no password hashes); session, `admin` or `operator` role |
+| `/auth/whoami` | GET | returns the current username **and role** (plus a freshly rotated `csrf_token` on the session-cookie path), via either the session cookie or an `Authorization: Bearer <device-token>` header |
+| `/auth/users` | GET | list users (no password hashes); session **or bearer device token**, `admin` or `operator` role |
 | `/auth/users` | POST | create a user; session+CSRF or an admin bearer token; `operator` cannot create an `admin` |
-| `/auth/password` | POST | self-service password change for the caller's own account; any authenticated role |
+| `/auth/password` | POST | self-service password change for the caller's own account; **session + CSRF (any role), or an admin bearer token** — a non-admin device token is refused 403 |
 | `/auth/users/{username}/password` | POST | reset another user's password; session+CSRF or admin bearer; `operator` cannot touch `admin` accounts |
 | `/auth/users/{username}/role` | POST | set a user's role; admin only |
 | `/auth/users/{username}/disable` | POST | disable a user; admin, or operator on non-admins |
 | `/auth/users/{username}/enable` | POST | re-enable a user; admin, or operator on non-admins |
 | `/auth/users/{username}` | DELETE | hard delete a user (after revoking their sessions/tokens); admin only |
-| `/auth/audit/summary` | GET | reduced audit view; session, `admin` or `audit` role — not the `CYCLAW_API_KEY` ops view |
+| `/auth/audit/summary` | GET | reduced audit view; session **or bearer device token**, `admin` or `audit` role — not the `CYCLAW_API_KEY` ops view |
 
 Three roles exist: `admin` (full access), `operator` (manage non-admin users,
 no delete/set-role), and `audit` (`/auth/audit/summary` only, `/query`
@@ -531,7 +531,7 @@ The browser first-run panel can also `POST /auth/bootstrap-password` from
 loopback (same-origin); off-box callers get 403. After the password exists
 that route returns 409 — use `cyclaw-user passwd` or `/auth/password`.
 
-Manage accounts after that with the same local-only `cyclaw-user` CLI
+Manage accounts after that with the same local-only `cyclaw-user` CLI (which also has a `role` subcommand)
 (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/
 `token revoke`) — it never runs over HTTP.
 
@@ -582,7 +582,12 @@ curl -s -b cookies.txt -X POST http://127.0.0.1:8787/auth/logout \
 ### Authenticated routes (Bearer `CYCLAW_API_KEY`)
 
 All of these return `401` when the key is missing **or** when `CYCLAW_API_KEY`
-is unset on the server — fail-closed in both directions.
+is unset on the server — fail-closed in both directions, **with the shipped
+`security.api_key_optional: false`** (`config.yaml`). Setting that flag true is the
+one deliberate bypass: `gate.py`'s `_api_key_bypass_allowed` then skips the key, but
+only for a request that is simultaneously from a loopback socket peer, carries no
+reverse-proxy forwarding header, and is not cross-site. A remote caller always needs
+the real key.
 
 | Route | Method | What it does |
 |---|---|---|
@@ -651,8 +656,10 @@ endpoints, is read-only.
 | `400` | your `Host` header is not in `config.yaml`'s `allowed_hosts`, or the injection filter rejected the query |
 | `401` | missing/invalid `CYCLAW_API_KEY` (or it is unset server-side) |
 | `404` | on a `/soul/*` route: `personality.enabled` is `false` in `config.yaml` |
+| `403` | cross-site request (`CROSS_SITE_BLOCKED`), a non-loopback caller on `/index/build` or `/auth/bootstrap-password`, a missing/invalid CSRF token, or an RBAC denial (`AUTH_ROLE_DENIED`) |
+| `409` | an index build is already running (`INDEX_BUILD_IN_PROGRESS`), or the first admin password is already set |
 | `422` | request body failed Pydantic validation — usually a misspelled field, since the models forbid extras |
-| `423` | `/auth/login` only: account temporarily locked from too many failed attempts — `retry_after_sec` in the response body |
+| `423` | `/auth/login` only: account temporarily locked from too many failed attempts — `retry_after_sec` under `detail.details` in the response body |
 | `429` | rate limit — 60 requests/min per IP |
 | `503` | `INDEX_NOT_FOUND` — run `python -m retrieval.indexer` |
 | `504` | the graph exceeded `api.graph_timeout_sec` (780s) |
@@ -661,8 +668,12 @@ endpoints, is read-only.
 
 The coding-harness console on `:8790` is a **separate app with its own route
 set** (`/api/status`, `/api/chat`, `/api/sessions`, …), documented in
-[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). None of the routes above
-exist on `:8790`, and none of the harness routes exist on `:8787`.
+[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). Two mounts overlap between
+the two apps — `GET /` (different pages: `gate.py:516` the terminal console,
+`harness/server.py:926` the harness console) and `/static/*` (`gate.py:514`,
+`harness/server.py:924` — each app serves its own `static/` directory under
+the same mount path). Apart from those two, none of the routes above exist on
+`:8790`, and none of the harness routes exist on `:8787`.
 
 ---
 
@@ -679,7 +690,7 @@ suffix exists on Linux and Windows specifically to avoid pip resolving the
 default CUDA-bundled wheel. **Apple Silicon has no CUDA build to disambiguate
 from, so no `+cpu`-suffixed macOS wheel is published at all** — that index
 404s for macOS, confirmed on this repo's first `macos-latest` CI run
-(`.github/workflows/ci.yml:168-173`).
+(`.github/workflows/ci.yml:641-655`).
 
 Verified against PyPI, 2026-08-02: `torch==2.13.0` publishes exactly six macOS
 wheels, and every one of them is `macosx_14_0_arm64`
@@ -694,7 +705,7 @@ Two consequences worth stating plainly:
   than the one this repo ships, which is outside what this guide covers.
 
 Three places in the repo already implement the correct macOS behavior and
-agree with each other — the CI lane (`.github/workflows/ci.yml:316-334`), the
+agree with each other — the CI lane (`.github/workflows/ci.yml:641-659`), the
 installer (`macos/install-cyclaw.sh:124-137`), and
 [`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). The by-hand steps in the
 macOS section above are those same commands.
@@ -710,7 +721,7 @@ hangs instead of failing loudly:
 
 1. **The tag must match what you actually pulled, in _two_ config keys.**
    `models.local_llm.model` **and** `guardrails.model` are both passed through
-   to Ollama, and `config-guard`'s C11 check fails the build if they drift
+   to Ollama, and `config-guard`'s C11 check **warns** if they drift (it only fails under `--strict`, and the `verify-skills` lane that runs it is `continue-on-error`, so nothing blocks a merge on it) when they drift
    apart. A tag mismatch against Ollama is an `Ollama HTTP 404`. Tags are
    case-sensitive — use exactly what `ollama list` prints.
 2. **Ollama's context length must have headroom**, or generation stalls at
@@ -978,7 +989,7 @@ results are hints, not a complete or live reachability map.
 | **macOS:** `No matching distribution found for torch==2.13.0` (no `+cpu`) | Either an Intel Mac (no `x86_64` wheel exists at this pin) or macOS < 14 (the wheel is `macosx_14_0_arm64`) — see [torch on macOS](#torch-on-macos-plain-build-no-cpu-suffix) |
 | **macOS:** `ollama serve` fails with address already in use | The Ollama `.app` is already serving `:11434` — nothing to fix |
 | Soul endpoints return 404 | Set `personality.enabled: true` in `config.yaml` |
-| `uvloop` install fails on Windows | Expected — uvloop is Linux-only; uvicorn falls back to asyncio automatically |
+| `uvloop` install fails on Windows | Expected — uvloop publishes no Windows wheel, so `uvicorn[standard]` simply omits it there and uvicorn falls back to asyncio. Nothing to fix. (uvloop *is* used on Linux and macOS — it is not Linux-only.) |
 
 ---
 

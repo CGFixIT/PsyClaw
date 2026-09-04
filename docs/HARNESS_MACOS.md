@@ -4,13 +4,18 @@ A grok-build / kimi-code style local coding harness for macOS (Apple Silicon,
 arm64) and Linux, bash or zsh. This is the POSIX-shell sibling of
 `docs/HARNESS_POWERSHELL.md` — same harness, same invariants, same security
 posture; only the install/launch glue differs. After setup, running `cyclaw`
-in any new terminal starts the harness control plane (loopback only) and opens
-the slash-command-driven console at `http://127.0.0.1:8790`.
+in any new terminal starts **both** the RAG gateway (`gate.py` on
+`http://127.0.0.1:8787`, serving `static/terminal.html`) **and** the harness
+control plane, and opens the slash-command-driven console at
+`http://127.0.0.1:8790`. Both are loopback-only. `--gate-port`, `--port`,
+`--no-gate` and `--no-harness` control this. **Windows differs:**
+`powershell/Invoke-CyClaw.ps1` starts only `harness.server`, so the gateway is
+launched separately there.
 
 The harness itself (`harness/`) is pure Python and carries no OS-specific code
 in its request-handling path: no shell-string invocation, no Windows-only
 process control, no platform-specific credential store. The only genuinely
-platform-coupled surface is the three install/launch scripts — `powershell/`
+platform-coupled surface is the two sibling script trees — `powershell/`
 for Windows, `macos/` for macOS/Linux — which is why this is a sibling script
 tree rather than a shared abstraction layer.
 

@@ -68,11 +68,11 @@ credential is not readable on the wire.
 | Fact | Evidence |
 |---|---|
 | `/query`, `/`, `/health`, `/static/*` require **no** authentication | route introspection of `gate.py` |
-| `/soul/*`, `/audit/summary`, `/ops/*` require a **single shared** bearer secret | `require_api_key`, `gate.py:96` |
-| The secret is compared in constant time and **fails closed** when unset | `hmac.compare_digest`, `gate.py:117`; unset `CYCLAW_API_KEY` → 401 |
+| `/soul/*`, `/audit/summary`, `/ops/*` require a **single shared** bearer secret | `require_api_key`, `gate.py:105` |
+| The secret is compared in constant time and **fails closed** when unset | `hmac.compare_digest`, `gate.py:150`; unset `CYCLAW_API_KEY` → 401 |
 | Failed auth is **already rate-limited** | `dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)]` — limiter runs *before* auth, pinned by `TestFailedAuthDoesNotBypassRateLimit` |
 | The console **already sends** a bearer token on every call, including `/query` | `static/terminal.js` `authHeaders()` |
-| Telegram **already sends** one to `/query` | `telegram/client.py:745`; config field documented *"Optional CyClaw API key for POST /query"* |
+| Telegram **already sends** one to `/query` | `telegram/client.py:769`; config field documented *"Optional CyClaw API key for POST /query"* |
 | No password, session, or TLS infrastructure exists | no argon2/bcrypt/passlib/itsdangerous/`SessionMiddleware`/`ssl_keyfile` anywhere |
 
 **Amendment (2026-08-09, Stages 1-2 landed; amended 2026-08-15, Stages 3-4
@@ -105,12 +105,12 @@ alongside the session/RBAC system this document specifies:
 `require_api_key` — the shared-secret mechanism row 2 above describes, in
 both its `gate.py` and `harness/server.py` (`utils/auth.py`) copies — for
 every route it gates, not just `/soul/*`/`/ops/*`/`/audit/summary` but also
-the harness console's 26 `guarded` routes. It is orthogonal to everything in
+the harness console's 29 `guarded` routes (23 in `harness/server.py`, 6 in `harness/agent_routes.py`). It is orthogonal to everything in
 this document: it does not touch `auth.enabled`, sessions, device tokens, or
 `/auth/*`, and an operator can run with `auth.enabled: true` (this design)
 and `api_key_optional: true` (bypassing the older mechanism) at the same
 time without either one affecting the other. The bypass is granted only to
-a **loopback socket peer**, so it never widens what a remote caller can
+a request that is simultaneously from a **loopback socket peer**, carries **no reverse-proxy forwarding header** (`X-Forwarded-For`/`-Host`/`-Proto`, `X-Real-IP`, `Forwarded` — a proxy on this host makes every remote caller present a loopback peer), and is **not cross-site** (the operator's own browser is a loopback peer too, and a CORS-simple POST executes before CORS withholds the response). `gate.py`'s `_api_key_bypass_allowed` treats every one as necessary. It never widens what a remote caller can
 reach; `config-guard`'s C13 check warns when it is combined with a
 non-loopback `api.host`. (C13 deliberately ignores `security.allowed_hosts`:
 that list filters `Host` headers and opens no listening socket.)
@@ -127,7 +127,7 @@ therefore refuses that route while `api_key_optional` is true; the
 statement of "my own auth is in front") still outranks it.
 
 That bind-time refusal is defence in depth, not the primary control. The
-primary one is per-request: the bypass requires a loopback peer, which holds
+primary one is per-request: the bypass requires all of a loopback peer, no forwarding header, and a non-cross-site request, which holds
 regardless of how the process was launched — including the container's
 `uvicorn gate:app --host 0.0.0.0` and `uvicorn harness.server:app`, neither
 of which reaches a bind guard at all.
@@ -290,9 +290,9 @@ admin` remains the local CLI path.
 When the operator opens the terminal (`:8787`) or harness (`:8790`) with
 auth on and that pending hash still in place, the UI shows a **Set admin
 password** panel instead of login. `GET /auth/setup-status` (and
-`/api/auth/setup-status` on the harness) reports `{needs_password, username}`
+`/api/auth/setup-status` on the harness) reports `{enabled, needs_password, username}`
 with no hashes. `POST /auth/bootstrap-password` accepts the new password
-**only from a loopback peer** (`127.0.0.1` / `::1`) with no reverse-proxy
+**only from a loopback peer** (the literal set `127.0.0.1` / `::1` / `localhost`, plus anything `ipaddress.ip_address(...).is_loopback` accepts) with no reverse-proxy
 forwarding headers, then mints a session. A non-loopback or proxied caller
 gets 403. Once a real hash is stored the POST returns
 409. The bind guard also refuses a LAN bind while `needs_password_setup()`
@@ -461,8 +461,12 @@ Three canonical lowercase roles on `users.role`. Bootstrap `admin` is
 
 `HIGH_PRIVILEGE` in `utils/authn.py` is the hook for later destructive
 ops. HTTP admin lives on `gate_auth.py` (`/auth/users*`,
-`/auth/audit/summary`, plus the self-service `POST /auth/password` any
-authenticated role can call for its own account); `/auth/whoami` returns
-`username` + `role`. The harness exposes the same store at `/api/auth/*`
+`/auth/audit/summary`, plus the self-service `POST /auth/password`, which any
+authenticated role can call for its own account **over a session cookie + CSRF** — the
+bearer path requires an admin token (`_require_write_actor`)); `/auth/whoami` returns
+`username` + `role`, and — on the session-cookie path only, never for a device token —
+a freshly rotated `csrf_token`; the response is sent `Cache-Control: no-store`. The
+rotate is load-bearing: without it a reload leaves logout and Users writes 403. The
+harness exposes the same store at `/api/auth/*`
 with a separate cookie. Telegram still uses a named
 device token (`cyclaw-user token create <user> telegram`).
