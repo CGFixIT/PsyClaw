@@ -832,7 +832,7 @@ not an in-flight task.
 
 ### `docs/work/SESSION_NOTES.md` (moved from `docs/SESSION_NOTES.md`)
 
-This file is confirmed to be an empty template scaffold, not a live log: it contains only the purpose statement, a `### Session: <YYYY-MM-DD>` markdown template block, and a placeholder line — `*None yet. Sessions from this template will be appended below.*` (`docs/work/SESSION_NOTES.md:49`) — with zero populated session entries. This matches `.claude/rules/PROJECT_RULES.md`'s own note that the active log lives under `.claude/session-notes/`, not here. Do not add session entries to this file; it stays as the blank template it already is. For session goals, decisions, blockers, discoveries, and coverage gaps, write to `.claude/session-notes/` instead — that is where CLAUDE.md §7 ("Blocked") and §10 ("End") both point.
+This file is confirmed to be an empty template scaffold, not a live log: it contains only the purpose statement, a `### Session: <YYYY-MM-DD>` markdown template block, and a placeholder line — `*None yet. Sessions from this template will be appended below.*` (`docs/work/SESSION_NOTES.md:49`) — with zero populated session entries. It is nonetheless the sanctioned destination: `.claude/rules/PROJECT_RULES.md` names `docs/work/SESSION_NOTES.md` as the active log, and CLAUDE.md §7 ("Blocked") and §10 ("End") both point here. `.claude/session-notes/` does not exist and never should be written to. Session goals, decisions, blockers, discoveries and coverage gaps belong in this file — appended under the template block, which is why the scaffold is here.
 
 ### `docs/work/LOCAL_REMOTE_SYNC_GUARD.md` (moved from `docs/LOCAL_REMOTE_SYNC_GUARD.md`)
 

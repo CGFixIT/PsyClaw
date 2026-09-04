@@ -32,11 +32,11 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 ### Python
 
 - **Default:** Python 3.12 (`requires-python: >=3.12,<3.13` — numpy 1.26.x has no cp313 wheels)
-- **Typing:** Fully annotated. `from __future__ import annotations` when supporting <3.10.
+- **Typing:** Fully annotated. `from __future__ import annotations` in new modules (the floor is 3.12, so there is no <3.10 case to gate on).
 - **Linting:** `ruff check` + `ruff format` (line-length 120, py312)
 - **Type Checking:** `mypy --strict --python-version 3.12 --explicit-package-bases` on the lines you touch — best-effort, not CI-enforced, and the repo does not pass it clean end-to-end (see `CLAUDE.md` §4)
 - **No Secrets:** Environment variables only (read directly via `os.environ`/`os.getenv`; `pydantic-settings` is only a chromadb transitive, not a CyClaw pattern). Never hardcode tokens.
-- **No Mutations:** Data-modifying scripts must have `--dry-run` defaulting to safe mode.
+- **No Mutations:** Data-modifying scripts must default to a safe dry-run, with `--apply` to act (see `retrieval/clear_cache.py`). There is no `--dry-run` flag — safe is the default.
 - **Async:** Prefer `asyncio.TaskGroup` (3.11+) with `asyncio.gather` fallback.
 - **Safety:** No `shell=True` with user input. Always use `subprocess.run([...], list)`.
 
@@ -106,7 +106,7 @@ See `retrieval/hybrid_search.py` for implementation.
 
 - **Commits:** Clear, descriptive messages. Reference issue numbers when applicable.
 
-- **Force Push:** Never without explicit user approval. The stop hook blocks `--force-with-lease`.
+- **Force Push:** Never without explicit user approval. An external **session-runtime** stop hook — not wired in this repo's `.claude/settings.json`, which registers no `Stop` hook — may block `--force-with-lease`. See `CLAUDE.md` §10.
 
 ---
 
@@ -164,4 +164,4 @@ See `retrieval/hybrid_search.py` for implementation.
 - **Undefined behavior:** Post in `#cyclaw-dev` Slack.
 - **Security concerns:** File a private security issue on GitHub.
 - **Configuration drift:** Run `/CyClaw-Sandbox` and report findings.
-- **Stuck on a blocker:** Call out in `.claude/session-notes/` + Slack before context compaction.
+- **Stuck on a blocker:** Record it in `docs/work/SESSION_NOTES.md` (the active log, as this file already says above) + Slack before context compaction. `.claude/session-notes/` does not exist.

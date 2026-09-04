@@ -19,9 +19,19 @@ Run the CyClaw audit log analyzer. $ARGUMENTS
    cyclaw-metrics
    ```
 
-3. If `$ARGUMENTS` contains a date or time filter (e.g. "today", "last hour", "2026-06-20"), filter the JSONL before analysis:
+3. If `$ARGUMENTS` contains a date or time filter (e.g. "today", "last hour", "2026-06-20"),
+   `metrics.py` itself takes no arguments and never reads stdin -- piping a `grep` into it
+   is a silent no-op, and counting matching lines with `grep -c` only gives a count, not the
+   node/score/injection/error breakdown step 4 asks for. Filter the parsed events with
+   `iter_events()` and aggregate the result with `compute_metrics()` (both in `metrics.py`) --
+   timestamps are ISO 8601 (`utils/logger.py`), so a string-prefix match on the date is exact:
    ```bash
-   grep '"2026-06-20"' logs/audit.jsonl | python3 -m metrics
+   python3 -c "
+   from metrics import iter_events, compute_metrics
+   import json
+   events = [e for e in iter_events('logs/audit.jsonl') if e.get('timestamp', '').startswith('2026-06-20')]
+   print(json.dumps(compute_metrics(events), indent=2))
+   "
    ```
 
 4. Report the following from the output:

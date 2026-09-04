@@ -628,6 +628,10 @@ CyClaw/
 │   ├── skills_view.py          # /skills wiring diagram (prompt + agent-check vs catalog)
 │   ├── web_search.py           # allowlist-only GET; off by default; no search engine
 │   ├── agent_policy.py         # check-profile allowlist — console sends profile names, never argv
+│   ├── agent_routes.py         # the seven /api/agent/* routes (6 of the 29 guarded)
+│   ├── auth_routes.py          # the /api/auth/* console auth surface
+│   ├── env_keys.py             # allowlisted dotenv secret store ($CYCLAW_HOME/.env; file-only)
+│   ├── memory_notes.py         # console /memory notes store
 │   └── schemas.py              # request models
 ├── telegram/                   # (v1.9) optional Telegram channel (out-of-band), shipped enabled: false
 │   ├── cli.py
@@ -698,7 +702,7 @@ CyClaw/
 │   ├── gen_cert.py             # cyclaw-gen-cert — self-signed cert + key with hostname/LAN SAN
 │   └── telemetry_kill.py       # shared kill block — applied by gate.py, mcp_hybrid_server.py, retrieval/vector_store.py
 ├── schemas/                    # Pydantic API models (api.py; extra='forbid', strict)
-├── scripts/                    # install-githooks.sh, check-pr-template.sh
+├── scripts/                    # install-githooks.sh, check-pr-template.sh, measure_local_llm_throughput.py
 ├── deploy/                     # apparmor/ falco/ seccomp/ container-hardening profiles (all opt-in)
 ├── tests/
 ├── docs/

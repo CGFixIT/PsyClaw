@@ -112,8 +112,10 @@ Seed list so the first run has context — reconcile these:
    and referenced a nonexistent `soul_hash` constant.
 5. **`session-start-sync-check.sh`** exists but is not wired in `settings.json`;
    docs implying it runs are stale.
-6. **`docs/SESSION_NOTES.md`** is an empty scaffold while real notes live under
-   `.claude/session-notes/` — align the pointer.
+6. **The session-notes pointer moved.** The live path is
+   `docs/work/SESSION_NOTES.md` (still an empty scaffold, but it is the
+   sanctioned destination per `CLAUDE.md` §7/§10). Neither `docs/SESSION_NOTES.md`
+   nor `.claude/session-notes/` exists — align any doc still naming either.
 
 ## Guardrails
 

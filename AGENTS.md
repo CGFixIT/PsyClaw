@@ -230,7 +230,7 @@ Same commands as `CLAUDE.md` §8 (index build, `gate.py`/`cyclaw-server`, MCP se
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-`Dockerfile` and `docker-compose.yml` exist for containerized runs; their exact invocation is unverified against a documented CI target — confirm in the target environment before relying on it rather than assuming `docker build -t cyclaw .` / `docker compose up --build` work as-is.
+`Dockerfile` and `docker-compose.yml` exist for containerized runs. The image build IS covered by CI — `ci.yml`'s `docker-build` job builds the Dockerfile on every run (no `continue-on-error`), and `publish-ghcr.yml` pushes it — so `docker build -t cyclaw .` is a documented, exercised path. `docker compose up --build` is NOT covered by any CI target; confirm it in the target environment rather than assuming it works as-is.
 
 ## Test Commands
 

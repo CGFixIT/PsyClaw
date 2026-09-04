@@ -4,7 +4,7 @@ description: Maintain a structured session notes file that preserves execution c
 
 Invoke the `create-session-notes` skill and update the structured session notes file with current execution context. $ARGUMENTS
 
-See `.claude/skills/create-session-notes/SKILL.md` for the fixed section layout, content guidelines, and the file location (`docs/SESSION_NOTES.md` or `.claude/session-notes/`, per `CLAUDE.md` §7).
+See `.claude/skills/create-session-notes/SKILL.md` for the fixed section layout, content guidelines, and the file location (`docs/work/SESSION_NOTES.md`, per `CLAUDE.md` §7 and §10).
 
 ## Notes
 

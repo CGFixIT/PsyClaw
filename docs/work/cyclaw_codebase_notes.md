@@ -9,9 +9,10 @@
 > `CyClaw_Safe_Agentic_Enhancement_Plan.md`, not a live architecture doc — the
 > `file:line` citations below are not re-verified against current HEAD. The
 > §1 graph description in particular is now out of date: `graph.py` is a
-> 10-node topology (`retrieve`, `route_by_score`, `guardrail_input`,
-> `guardrail_output`, `local_llm`, `user_gate`, `grok_fallback`,
-> `claude_fallback`, `offline_best_effort`, `audit_logger`), not the 7-node
+> 12-node topology (`retrieve`, `route_by_score`, `guardrail_input`,
+> `guardrail_output`, `local_llm`, `user_gate`, `pre_action_hook_grok`,
+> `pre_action_hook_claude`, `grok_fallback`, `claude_fallback`,
+> `offline_best_effort`, `audit_logger`), not the 7-node
 > shape below — the optional guardrail rail and the `claude_fallback` node
 > (second external provider, PR #441) postdate this snapshot. See `CLAUDE.md`
 > §2 for the current, authoritative request-flow diagram.

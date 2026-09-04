@@ -109,8 +109,11 @@ the single source of truth and the wrapper only points at it, so the two
 cannot drift apart in substance. Five commands are standalone by design and
 have no skill folder (`/audit`, `/check-soul`, `/conversation-summary`,
 `/run`, `/status`) — they are short inline procedures, not skills.
-2026-08-11: added the two missing wrappers (`config-guard`, `dep-guard`) so
-the wrapper set now covers all skills; nothing else was missing.
+2026-08-11: added the two missing wrappers (`config-guard`, `dep-guard`).
+As of 2026-09-04 one skill still ships without a wrapper — `fable-5.1-cc`,
+which `CLAUDE.md` documents as a usable `/fable-5.1-cc` entry point. Adding
+the wrapper is a new file, so it is left as an operator decision rather than
+created during a doc pass.
 
 ## Environment Doctor — settings.json audit (2026-08-11)
 

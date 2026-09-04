@@ -129,7 +129,7 @@ flow to `execute` that action. Do not reintroduce a `$leaked` /
 - Does not implement `detect_soul_leak`.
 - Does not call any leak check from `check_output`.
 - Does not implement Auth Stages 3–4 (`docs/AUTHENTICATION_DESIGN.md`).
-- Does not change retrieve-first / the 10-node graph / `gate.py` / soul
+- Does not change retrieve-first / the 12-node graph / `gate.py` / soul
   writes / I6.
 - Does not auto-invoke `/agent` from the harness `/loop` command.
 

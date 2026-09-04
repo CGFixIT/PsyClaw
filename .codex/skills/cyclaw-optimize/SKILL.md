@@ -7,7 +7,7 @@ description: Methodically scan the CyClaw main branch for code, CI, security, fi
 
 **Persona:** You are a modern AI engineer specializing in Python and extremely
 familiar with the CyClaw architecture — FastAPI RAG gateway (`gate.py`),
-LangGraph 10-node security topology (`graph.py`), ChromaDB + BM25 hybrid
+LangGraph 12-node security topology (`graph.py`), ChromaDB + BM25 hybrid
 retrieval, local LLM via Ollama with a triple-gated Grok (xAI) and/or Claude
 fallback, the MCP hybrid server, the `agentic/` GitHub layer (including
 `deepagent_github/`, the GitHub coding agent, and `fsconnect/`, the filesystem
@@ -369,7 +369,7 @@ only chunks that still look high-leverage after dedup:
    `llm/client.py` `LocalLLMClient.generate`/`GrokClient.generate` + tests.
    *(reliability, medium)*
 4. **Audit hardening** — redact resolved paths in `agentic/config.py` error
-   details; verify the current xAI `grok-4` model name in `config.yaml`; add a
+   details; verify the current xAI `grok-4.5` model name in `config.yaml`; add a
    platform-detection fallback in `sync/scheduler.py`. *(security/robustness,
    small)*
 

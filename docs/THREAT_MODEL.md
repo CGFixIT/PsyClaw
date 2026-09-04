@@ -62,7 +62,7 @@ multi-tenant workloads.
 | **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
 | **Uncontrolled evaluation egress** | Standalone CLI refuses unless `CYCLAW_EVAL_LIVE=1` and `ANTHROPIC_API_KEY` are both present; Anthropic origin is exact-pinned; contestant is loopback-only; embedding downloads are forced offline | `tests/judge_eval.py`, `tests/test_judge_eval.py` |
 | **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any third-party import from one shared mapping (`utils/telemetry_kill.py`), applied at import time by every maintained Python chokepoint — gateway, MCP server, metrics, harness server, the retrieval indexer/vector-store/cache CLIs, the auth/cert CLIs, and the sync/agentic/guardrails/telegram/opentweet packages (invariant-guard G1 pins 15 of these orderings) — AND delivered as literal environment before the interpreter starts at every process boundary: Docker ENV, the shipped launchers, generated launchd plists / Windows tasks / cron lines, verifier and `gh` children (`build_telemetry_safe_env`). An ambient value in the operator's environment is overwritten, not inherited; the declarative-OTel config names are removed outright. These controls silence telemetry readers only — they are not a network kill switch, and intentional policy-gated egress is classified separately (SECURITY.md); HF Hub network calls are additionally cut off via `local_files_only=True` once the embedding model is confirmed cached on disk (the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` env vars alone do not gate this in-process — huggingface_hub latches that constant at its own import time, which the eligibility probe itself triggers before the env vars are set; `local_files_only` is passed directly to `SentenceTransformer(...)` instead, which gates independently); raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
-| **DoS (request flood / runaway process)** | Per-IP rate limit (60/min) on every route except the two unauthenticated read-only probes `GET /health` and `GET /index/status`; container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
+| **DoS (request flood / runaway process)** | Per-IP rate limit (60/min) on every API route except the two unauthenticated read-only probes `GET /health` and `GET /index/status`. The console page `GET /` and the `/static` mount are static-asset surfaces and carry no rate-limit dependency either; container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
 | **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; Docker builtin seccomp; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
 
 ---
@@ -955,15 +955,7 @@ I6 isolation is locked by `tests/test_judge_eval.py`.
 
 ---
 
-## 7. Reporting
-
-Security issues: follow [`.github/SECURITY.md`](../.github/SECURITY.md). Resolved
-findings and their status live in
-[`docs/audits/SECURITY_REVIEW_STATUS.md`](./audits/SECURITY_REVIEW_STATUS.md).
-
----
-
-## Ninth amendment (2026-08-15) — `security.api_key_optional`
+### Fourteenth amendment (2026-08-15) — `security.api_key_optional`
 
 `config.yaml`'s `security.api_key_optional` (ships **false**) is a deliberate
 operator opt-out from the shared-secret gate. When true, `require_api_key`
@@ -1044,3 +1036,11 @@ deployment. Containers should set `CYCLAW_API_KEY`.
 `api.host`. It deliberately does **not** consider `security.allowed_hosts`:
 that list filters `Host` headers and opens no listening socket, so LAN names
 there do not make a loopback-bound server reachable.
+
+## 7. Reporting
+
+Security issues: follow [`.github/SECURITY.md`](../.github/SECURITY.md). Resolved
+findings and their status live in
+[`docs/audits/SECURITY_REVIEW_STATUS.md`](./audits/SECURITY_REVIEW_STATUS.md).
+
+---

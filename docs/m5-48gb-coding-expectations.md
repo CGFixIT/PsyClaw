@@ -170,7 +170,7 @@ You already have the durable slots. Do not invent a fourth brain.
 | Slot | Role |
 |---|---|
 | `plan.md` via `real-repo-run-plan` | Human-approved, injection-scanned, 6k cap, hashed onto the run |
-| `docs/SESSION_NOTES.md` | Current state, files, errors, next step |
+| `docs/work/SESSION_NOTES.md` | Current state, files, errors, next step |
 | `docs/memories/` + consolidation | Session-end / 12h pass — not a live coding scratchpad |
 | `memory/` facts | Human propose/apply only. Auto-extract from LLM output is **not** implemented (memory-poisoning) |
 
@@ -181,7 +181,7 @@ skill and I5 exist to stop.
 
 ## Operator rules (scratchpad / paging)
 
-1. Scratchpad = run-scoped file next to the jailed clone or `docs/SESSION_NOTES.md`, not a new DB and not `docs/memories/`.
+1. Scratchpad = run-scoped file next to the jailed clone or `docs/work/SESSION_NOTES.md`, not a new DB and not `docs/memories/`.
 2. Schema, not a diary: `goal`, `constraints` (I6 list), `files`, `last_error`, `next_edit`. Cap it (~2k tokens/section, same spirit as session notes).
 3. 27B may **append** errors and file paths. It does not get to rewrite constraints or invent facts.
 4. Compact **after** the write. Next turn loads: system + I6 list + scratchpad slice + current file + current test. Not the whole transcript.

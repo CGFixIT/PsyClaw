@@ -1,7 +1,8 @@
 ---
 description: >-
-  Statically validate CyClaw's dependency-pin invariants across pyproject.toml
-  and constraints.txt — pydantic/pydantic-core lock-step, numpy held < 2,
+  Statically validate CyClaw's dependency-pin invariants across pyproject.toml,
+  constraints.txt, environment.yml, and the CI workflows —
+  pydantic/pydantic-core lock-step, numpy held < 2,
   torch pinned +cpu, uvicorn carrying no extra in the constraints file,
   exact-pin reproducibility, and cross-file version agreement. Use before
   merging any change to pyproject.toml, constraints.txt, or requirements.txt,
