@@ -367,11 +367,22 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── D8 Graph node count ─────────────────────────────────────────────────
     print("D8 Graph node count -> graph.py add_node()")
-    graph_src = (root / "graph.py").read_text(encoding="utf-8")
-    real_nodes = len(re.findall(r"\.add_node\(", graph_src))
-    if real_nodes == 0:
-        note("D8", "graph.py .add_node() calls", "no add_node() calls found — parser or graph.py changed shape")
+    graph_path = root / "graph.py"
+    # Absent-safe like D7's doctrine inputs: a missing graph.py is an unreadable
+    # input, not drift, and must never take the checker outside its documented
+    # 0/2/3 exit contract. Reading it unconditionally crashed with a traceback
+    # and exit 1 on any tree without it -- including verify.sh's own D7 fixture,
+    # where the surrounding `|| true` hid the crash and the self-test still
+    # reported success (Codex P2 on PR #1308).
+    graph_src = graph_path.read_text(encoding="utf-8") if graph_path.exists() else None
+    if graph_src is None:
+        ok("D8", "graph.py absent -- node-count cross-check skipped")
+        real_nodes = 0
     else:
+        real_nodes = len(re.findall(r"\.add_node\(", graph_src))
+    if graph_src is not None and real_nodes == 0:
+        note("D8", "graph.py .add_node() calls", "no add_node() calls found — parser or graph.py changed shape")
+    elif graph_src is not None:
         # Same shape as D4, and added for the same reason: four separate docs
         # (a command doc, its .codex mirror, a work note and a NeMo phase doc)
         # all sat on "10-node" after the two pre_action_hook_* nodes landed,

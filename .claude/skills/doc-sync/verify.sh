@@ -79,6 +79,9 @@ echo "detection self-test: PASS (D1 + D5 both directions detected by name, exit 
 #    "8000 chars" remains elsewhere — whole-doc substring would still pass.
 d7tmp="$(mktemp -d)"
 cp "$repo_root"/config.yaml "$repo_root"/pyproject.toml "$repo_root"/gate.py "$d7tmp"/
+# graph.py feeds D8. Omitting it used to crash the checker mid-run; the
+# `|| true` below then hid a traceback behind output printed before it.
+cp "$repo_root"/graph.py "$d7tmp"/
 mkdir -p "$d7tmp/.claude" "$d7tmp/docs" "$d7tmp/macos"
 cp "$repo_root"/.claude/settings.json "$d7tmp/.claude/"
 cp -r "$repo_root"/.claude/skills "$d7tmp/.claude/"
@@ -115,7 +118,14 @@ cat > "$d7tmp/docs/m5-48gb-coding-expectations.md" <<EOF
 EOF
 
 # Positive: adjacent citations → D7 ok (other checks may still drift).
-d7_ok_out="$("$PY" "$checker" --repo-root "$d7tmp" 2>&1 || true)"
+d7_ok_out="$("$PY" "$checker" --repo-root "$d7tmp" 2>&1)" && d7_rc=0 || d7_rc=$?
+# 0 = clean, 2 = drift. Anything else (notably 1 from an unhandled exception) is
+# the checker crashing, which every `|| true` in this file would otherwise mask.
+if [ "$d7_rc" -ne 0 ] && [ "$d7_rc" -ne 2 ]; then
+  echo "D7 adjacency self-test: FAIL — checker exited $d7_rc (expected 0 or 2); it crashed:" >&2
+  printf '%s\n' "$d7_ok_out" >&2
+  exit 1
+fi
 if ! printf '%s\n' "$d7_ok_out" | grep -q 'ok    \[D7\]'; then
   echo "D7 adjacency self-test: FAIL — expected D7 ok on key-adjacent fixture:" >&2
   printf '%s\n' "$d7_ok_out" >&2
