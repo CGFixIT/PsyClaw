@@ -1355,3 +1355,5 @@ are in [`macos/README.md`](macos/README.md) and
 ---
 
 *designed and built by Chris Grady, with AI tooling used under human review / CI / invariant-guard*
+
+*source-available - all rights reserved*
