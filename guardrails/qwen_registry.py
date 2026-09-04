@@ -1,4 +1,11 @@
-"""Optional Qwen/Ollama tag manifest. Strict mode default-off. No weight fetch."""
+"""Optional Qwen/Ollama tag manifest. Strict mode default-off. No weight fetch.
+
+STATUS (verified 2026-09-04): no caller outside this module's own tests.
+``load_qwen_manifest`` is never invoked, and ``provenance_ids_for_docs``
+produces ids for ``GuardrailDecision.provenance_ids`` -- a field on a
+``guardrails/boundary.py`` dataclass that nothing constructs. Kept alongside
+that module (owner decision); see its STATUS note.
+"""
 
 from __future__ import annotations
 

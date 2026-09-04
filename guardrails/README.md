@@ -43,12 +43,12 @@ python -m guardrails.cli test
 | `metrics.py` | Separate `logs/guardrails.jsonl` (hashes, not the core audit stream) |
 | `cli.py` / `selftest.py` | Operator surface |
 | `errors.py` | `GuardrailsError` hierarchy, rooted at `utils.errors.RAGError` |
-| `boundary.py` | Provider-independent typed decisions + provenance (#1134 Phase 1). Hashes and reason codes only — never raw prompts/responses. Never imported by the core three (I6) |
+| `boundary.py` | Provider-independent typed decisions + provenance (#1134 Phase 1). Hashes and reason codes only — never raw prompts/responses. Never imported by the core three (I6). **No consumer as of 2026-09-04** — Phases 2a/3/4/5 shipped without adopting these types (Phase 5 went out as `utils/tool_broker.py`), and `profiles.py` mirrors `GuardrailStage` by hand. Kept as the typed vocabulary a future broker would adopt |
 | `broker.py` | NeMo non-generating `LLMRails.check` around the existing generation helper (#1134 Phase 3). Never grants I3, never calls `generate_async`; graph reaches it only via `utils/guardrail_bridge` |
 | `tool_broker.py` | Re-export of `utils.tool_broker` (canonical name-gate). Harness imports `utils`, not this package |
 | `call_inventory.py` | Fail-closed AST inventory of `ChatOpenAI`/`ChatXAI`/`ChatAnthropic`/`generate_async` call sites. Unregistered files fail pytest and `python -m guardrails.call_inventory` (exit 1) |
 | `profiles.py` / `profiles.yaml` | Machine-readable guardrail profile matrix; rejects any profile claiming `mode: enforced` for a rail outside `IMPLEMENTED_RAILS` |
-| `qwen_registry.py` / `qwen_manifest.yaml` | Optional Qwen/Ollama tag manifest; strict mode default-off, no weight fetch |
+| `qwen_registry.py` / `qwen_manifest.yaml` | Optional Qwen/Ollama tag manifest; strict mode default-off, no weight fetch. **No caller as of 2026-09-04** — it feeds `boundary.py`'s unconstructed `GuardrailDecision.provenance_ids`; kept with it |
 | `config/` | NeMo `config.yml` + Colang templates |
 
 ## Status (code, not the package docstring)
