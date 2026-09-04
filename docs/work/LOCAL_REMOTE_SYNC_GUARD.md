@@ -25,11 +25,16 @@ reconciliation is ad-hoc.**
 
 ## Mechanism
 
-A `SessionStart` hook (`.claude/hooks/session-start-sync-check.sh`, included in
-this PR but **inert until wired**) that, on every session start:
+A `SessionStart` hook (`.claude/hooks/session-start-sync-check.sh`, **wired since
+2026-09-04** as the second entry in `settings.json`'s `SessionStart` array) that,
+on every session start:
 
-1. **Pins commit identity** repo-locally to `noreply@anthropic.com` / `Claude`
-   — eliminates the recurring "Unverified" stop-hook failure at its source.
+1. **Pins commit identity** repo-locally to
+   `cyclaw-agent@users.noreply.github.com` / `CyClaw Agent` — the driver-agnostic
+   default from `utils/agent_identity.py`, overridable via
+   `CYCLAW_AGENT_COMMIT_EMAIL` / `CYCLAW_AGENT_COMMIT_NAME`. Eliminates the
+   recurring "Unverified" failure at its source, without the committer pretending
+   the driver was Claude when it was often a local model or another agent.
 2. **Fetches** the default branch (read-only) and **reports** ahead/behind
    counts for the current branch vs `origin/<default>`.
 3. If local `main` has diverged, **prints guidance** (ff-only when safe; review
@@ -41,10 +46,11 @@ only removes the "I didn't realize it had drifted" failure mode.
 
 ---
 
-## How to enable (opt-in)
+## Wiring (enabled 2026-09-04)
 
-The hook script is committed but does nothing until referenced from
-`.claude/settings.json`. Create or merge this into that file:
+The hook is registered in `.claude/settings.json` as the second `SessionStart`
+entry, alongside the Python-coding-agent persona loader. This is the shape that
+landed — kept here so the wiring stays reviewable in one place:
 
 ```json
 {

@@ -60,10 +60,11 @@ All `*-refactor` skills follow the same seven-step cycle:
 ├── utility-prompts/       ← coordinator / session-title / tool-summary / next-action
 ├── commands/              ← reference command docs
 ├── tools/                 ← tool-usage reference docs
-├── hooks/                 ← session-start-sync-check.sh only; on disk but NOT
-│                            registered in settings.json. The live SessionStart /
-│                            PreCompact / SessionEnd / UserPromptSubmit hooks are
-│                            inline commands in settings.json pointing into .claude/skills/*
+├── hooks/                 ← session-start-sync-check.sh only; registered as the
+│                            second SessionStart hook since 2026-09-04. The other
+│                            live hooks (SessionStart persona loader, PreCompact,
+│                            SessionEnd) are inline commands in settings.json
+│                            pointing into .claude/skills/*
 ├── memory/                ← legacy memory location (live memory: docs/memories/)
 └── rules/                 ← project-specific rules (PROJECT_RULES.md; plain
                               Markdown, no frontmatter, applies repo-wide)
@@ -110,36 +111,40 @@ cannot drift apart in substance. Five commands are standalone by design and
 have no skill folder (`/audit`, `/check-soul`, `/conversation-summary`,
 `/run`, `/status`) — they are short inline procedures, not skills.
 2026-08-11: added the two missing wrappers (`config-guard`, `dep-guard`).
-As of 2026-09-04 one skill still ships without a wrapper — `fable-5.1-cc`,
-which `CLAUDE.md` documents as a usable `/fable-5.1-cc` entry point. Adding
-the wrapper is a new file, so it is left as an operator decision rather than
-created during a doc pass.
+2026-09-04: added `fable-5.1-cc`, the last skill that shipped without one. The
+wrapper set now covers every skill again — verify with
+`comm -23 <(ls .claude/skills | sort) <(ls .claude/commands | sed 's/\.md$//' | sort)`,
+which must print nothing.
 
 ## Environment Doctor — settings.json audit (2026-08-11)
 
 A doctor-style audit of `.claude/settings.json` was run against the live tree
 (don't re-create what passes; fix only what's broken). Verdict and findings:
 
-**settings.json: one dangling hook reference as of 2026-08-22.** Valid JSON
-against the declared schema, and every `check_*.py` / `verify.sh` checker path
-resolves. But the registered `UserPromptSubmit` hook points at
-`.claude/skills/fable-protocol/context_gate.py`, which no longer exists — that
-file was deleted on `main` and the skill directory now holds only `SKILL.md`.
-The hook command ends in `2>/dev/null || true`, so it silently no-ops instead
-of erroring, which is exactly why the drift went unnoticed. Fixing it means
-editing `settings.json` (unwiring the hook or restoring the script), which is a
-High-tier change under `CLAUDE.md` §7 — confirm intent with the operator rather
-than doing it as part of a doc pass. Note also that the four registered hook
-*entries* resolve to three distinct scripts:
+**settings.json: the dangling hook is gone (resolved 2026-09-04).** Valid JSON
+against the declared schema, and every hook path now resolves. The history is
+worth keeping: from some point before 2026-08-22 until 2026-09-04 the registered
+`UserPromptSubmit` hook pointed at
+`.claude/skills/fable-protocol/context_gate.py`, a file deleted on `main`. Because
+the command ended in `2>/dev/null || true` it silently no-opped on every prompt
+instead of erroring — which is precisely why it went unnoticed for weeks. The
+operator's call was to unwire it rather than write a replacement: the skill stays
+reachable as `/fable-protocol` and through its `description` trigger, and injecting
+an 18KB skill into every prompt is cost the skill's own §7 warns about. **Lesson
+encoded:** the sync-check hook added the same day carries no `|| true`, because the
+script already always exits 0 and that tail is the thing that hid the last failure.
+The four registered hook *entries* now resolve to three distinct scripts:
 `memory-orchestrator/orchestrate.py` is referenced twice (`PreCompact` and
 `SessionEnd`). Otherwise:
 no personal data (no usernames, absolute machine paths, or emails — keep it
 that way, this file is shared with every collaborator); hooks anchor to
 repo-relative paths so they survive any checkout location. Observation, not
 changed: the `PreCompact`/`SessionEnd` memory hooks have no `|| true` guard
-while `SessionStart`/`UserPromptSubmit` do — if `python3` is ever absent on
+while the `SessionStart` persona loader does — if `python3` is ever absent on
 an operator machine those two will surface hook errors; left as-is because
 hook edits are High tier (`CLAUDE.md` §7) and there is no recorded failure.
+The `SessionStart` sync-check added 2026-09-04 likewise has no `|| true` — that
+is deliberate, not an oversight (see the dangling-hook note above).
 
 **Remote-environment env-var misconfiguration (root cause of the stray
 `C:\Users\...` directory).** The Claude Code remote execution environment for

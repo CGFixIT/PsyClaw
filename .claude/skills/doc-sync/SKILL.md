@@ -113,8 +113,10 @@ Seed list so the first run has context — reconcile these:
    applied by the session runtime — say so, or wire it (D6).
 4. **`check-soul.md`** (fixed this session) claimed soul.md is required to boot
    and referenced a nonexistent `soul_hash` constant.
-5. **`session-start-sync-check.sh`** exists but is not wired in `settings.json`;
-   docs implying it runs are stale.
+5. **`session-start-sync-check.sh`** was wired as a second `SessionStart` hook on
+   2026-09-04; docs still saying "if wired" or "not registered" are now the stale
+   side. The same change unwired a `UserPromptSubmit` hook pointing at a deleted
+   script — a hook path that does not resolve is a drift class worth checking.
 6. **The session-notes pointer moved.** The live path is
    `docs/work/SESSION_NOTES.md` (still an empty scaffold, but it is the
    sanctioned destination per `CLAUDE.md` §7/§10). Neither `docs/SESSION_NOTES.md`
