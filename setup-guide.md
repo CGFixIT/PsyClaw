@@ -668,8 +668,12 @@ endpoints, is read-only.
 
 The coding-harness console on `:8790` is a **separate app with its own route
 set** (`/api/status`, `/api/chat`, `/api/sessions`, …), documented in
-[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). Apart from `GET /`, which both apps serve (different pages — `gate.py:516` the terminal console, `harness/server.py:926` the harness console), none of the routes above
-exist on `:8790`, and none of the harness routes exist on `:8787`.
+[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). Two mounts overlap between
+the two apps — `GET /` (different pages: `gate.py:516` the terminal console,
+`harness/server.py:926` the harness console) and `/static/*` (`gate.py:514`,
+`harness/server.py:924` — each app serves its own `static/` directory under
+the same mount path). Apart from those two, none of the routes above exist on
+`:8790`, and none of the harness routes exist on `:8787`.
 
 ---
 
