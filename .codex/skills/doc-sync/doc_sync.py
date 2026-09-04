@@ -127,6 +127,18 @@ def _nearest_heading(text: str, pos: int) -> str:
     return heading
 
 
+def _route_documented(route: str, text: str) -> bool:
+    """Whether `route` appears in `text` as a complete route token, not as a
+    prefix of a longer one. Plain substring containment let a documented
+    child route ("/auth/users/{username}/role") satisfy the check for its
+    own parent ("/auth/users") even when the parent was never separately
+    documented -- deleting both real "/auth/users" rows from CLAUDE.md still
+    reported "all routes named" (Codex P2 on PR #1308).
+    """
+    pattern = re.escape(route)
+    return re.search(rf"(?<![\w/{{}}-]){pattern}(?![\w/{{}}-])", text) is not None
+
+
 _drift: list[dict] = []
 
 
@@ -338,7 +350,15 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             for start, end in unit_bounds:
                 if start <= m.start() < end:
-                    if _pattern_context.search(text[start:end]):
+                    # Same heading-carry fallback as D8: "## Prompt-injection
+                    # sanitizer" followed by a separate "It has 99 patterns."
+                    # paragraph put the context word outside this claim's own
+                    # unit (Codex P2 on PR #1308).
+                    unit_context = _pattern_context.search(text[start:end])
+                    heading_context = not unit_context and _pattern_context.search(
+                        _nearest_heading(text, start)
+                    )
+                    if unit_context or heading_context:
                         drift_files.append(f"{name} claims {claimed}")
                     break
     if not drift_files:
@@ -367,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
     routes = sorted(routes)
     # Ignore the static mount and root; check the meaningful API routes.
     api_routes = [r for r in routes if r not in ("/",)]
-    missing = [r for r in api_routes if r not in claude]
+    missing = [r for r in api_routes if not _route_documented(r, claude)]
     if not missing:
         ok("D5", f"all {len(api_routes)} API routes named in CLAUDE.md")
     else:
@@ -393,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
                  "route cross-check silently stopped covering anything")
         else:
             body = sec.group(0)
-            undocumented = [r for r in api_routes if r not in body]
+            undocumented = [r for r in api_routes if not _route_documented(r, body)]
             # Route-shaped tokens the guide claims: backticked table cells and
             # literal curl URLs against a loopback host:port.
             claimed = set(re.findall(r"`(/[A-Za-z0-9_/*-]*)`", body))
@@ -451,10 +471,23 @@ def main(argv: list[str] | None = None) -> int:
     # file that can make the claim is scanned now, and attribution is judged
     # per file: one doc getting it right does not excuse another getting it
     # wrong.
+    _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced", re.I)
     # "host" added for the live wording "unless the host stop-hook demands
     # otherwise" (fable-5.1-cc/SKILL.md) -- attributes enforcement outside
-    # the repo, same as "session runtime", just a different word for it.
-    _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced|\bhost\b", re.I)
+    # the repo, same as "session runtime", just a different word for it. Kept
+    # SEPARATE from _runtime_attribution and proximity-anchored to the phrase
+    # itself: unlike "session runtime"/"not wired"/"runtime-enforced" (rare,
+    # distinctive phrases unlikely to appear coincidentally), "host" alone is
+    # an ordinary word ("...in this host repository") that a whole-unit
+    # search would wrongly treat as attribution no matter how far it sits
+    # from the actual claim (Codex P2 on PR #1308). This is NOT the general
+    # clause-attribution problem documented below as unsolvable: that one
+    # involved separating two DIFFERENT hook names at comparable distances;
+    # here both the false and true cases involve the same "host stop-hook"
+    # phrase, cleanly separated by adjacency (0 words) vs. not (5+ words).
+    _host_attribution = re.compile(
+        r"\bhost\W+(?:\w+\W+){0,2}?stop[- ]hook|stop[- ]hook\W+(?:\w+\W+){0,2}?\bhost\b", re.I
+    )
     # Bare co-occurrence with "stop hook" was too broad: CLAUDE.md's own Kimi
     # passage ("Kimi has neither the GitHub MCP tools nor the session
     # stop-hook...") mentions the phrase while denying it applies, which is not
@@ -565,7 +598,9 @@ def main(argv: list[str] | None = None) -> int:
     def _naive_claims(text: str) -> list[str]:
         return [
             unit for unit in _claim_units(text)
-            if _stop_hook_claim.search(unit) and not _runtime_attribution.search(unit)
+            if _stop_hook_claim.search(unit)
+            and not _runtime_attribution.search(unit)
+            and not _host_attribution.search(unit)
         ]
     naive_docs = [name for name, text in hook_docs.items() if _naive_claims(text)]
     claiming_docs = [n for n, t in hook_docs.items() if _stop_hook_claim.search(t)]
