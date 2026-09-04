@@ -75,7 +75,7 @@ done
 # without ever planting a stale claim against it meant this self-test never
 # exercised D8 at all. Confirmed by Codex reviewing PR #1308: deleting the entire
 # D8 block from doc_sync.py still left this self-test reporting PASS, exit 0.
-printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a %s-node topology.\n\nA stop hook, if applied by the session runtime, may block force-push.\n' "$stale_node_count" > "$tmp/CLAUDE.md"
+printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a %s-node topology.\n\nThe stop hook blocks force-push, if applied by the session runtime.\n' "$stale_node_count" > "$tmp/CLAUDE.md"
 mkdir -p "$tmp/.claude/rules"
 printf 'The stop hook blocks --force-with-lease.\n' > "$tmp/.claude/rules/PROJECT_RULES.md"
 # setup-guide.md claiming a route that does not exist => the OTHER direction of
@@ -123,11 +123,18 @@ if ! grep -qF "DRIFT [D8]" "$stub_out"; then
 fi
 # D6's own positive+negative case: the planted PROJECT_RULES.md sentence
 # ("The stop hook blocks --force-with-lease.") has no attribution anywhere in
-# its own file and must fire; the stub CLAUDE.md's sentence ("...if applied by
-# the session runtime, may block...") carries its attribution in the SAME
-# sentence and must NOT cause CLAUDE.md to be named for this reason (it may
-# still appear in the D6 line for unrelated D1/D5 causes elsewhere in this same
-# stub, so the assertion targets the D6 line's own doc list precisely).
+# its own file and must fire; the stub CLAUDE.md's sentence ("The stop hook
+# blocks force-push, if applied by the session runtime.") carries its
+# attribution in the SAME sentence and must NOT cause CLAUDE.md to be named
+# for this reason (it may still appear in the D6 line for unrelated D1/D5
+# causes elsewhere in this same stub, so the assertion targets the D6 line's
+# own doc list precisely). The CLAUDE.md sentence must itself match
+# _stop_hook_claim (control verb "blocks" within the word window) or this
+# negative case is vacuous -- it would pass even with _runtime_attribution
+# deleted entirely, since no claim was ever detected in the first place
+# (Codex P2 on PR #1308: the original wording put 7 words between "stop hook"
+# and "block", one past the regex's 6-word window, so it silently never
+# matched at all).
 d6_line=$(grep -F "DRIFT [D6]" "$stub_out" || true)
 if [ -z "$d6_line" ] || ! printf '%s' "$d6_line" | grep -qF "PROJECT_RULES.md"; then
   echo "detection self-test: FAIL — D6 naive stop-hook claim not detected" >&2

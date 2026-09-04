@@ -503,9 +503,16 @@ def main(argv: list[str] | None = None) -> int:
                     node_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
         node_drift = []
         for name, text in node_files.items():
-            for m in re.finditer(r"(\d+)[\s-]+nodes?\b", text):
-                if int(m.group(1)) != real_nodes:
-                    node_drift.append(f"{name} claims {m.group(1)}-node")
+            for m in re.finditer(r"(~\s?)?(\d+)[\s-]+nodes?\b", text):
+                # A leading "~" is generic sizing advice ("avoid monolithic
+                # graphs beyond ~10 nodes"), not a claim about CyClaw's own
+                # topology -- python-coding-agent/SKILL.md:241 triggered a
+                # false positive here (Codex P2 on PR #1308) because the
+                # regex had no way to distinguish "~10 nodes" from "10-node".
+                if m.group(1):
+                    continue
+                if int(m.group(2)) != real_nodes:
+                    node_drift.append(f"{name} claims {m.group(2)}-node")
         if node_drift:
             note("D8", f"graph.py has {real_nodes} add_node() calls",
                  f"stale graph node-count claims: {sorted(set(node_drift))}")
