@@ -49,8 +49,12 @@ cp -r "$repo_root"/.claude/skills "$tmp/.claude/"
 for h in server.py agent_routes.py auth_routes.py; do
   [ -f "$repo_root/harness/$h" ] && cp "$repo_root/harness/$h" "$tmp/harness/"
 done
-# A CLAUDE.md that mentions almost nothing => guaranteed D1/D5 drift.
-printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n' > "$tmp/CLAUDE.md"
+# A CLAUDE.md that mentions almost nothing => guaranteed D1/D5 drift. The planted
+# stale node-count claim is D8's own fixture -- copying graph.py into $tmp (above)
+# without ever planting a stale claim against it meant this self-test never
+# exercised D8 at all. Confirmed by Codex reviewing PR #1308: deleting the entire
+# D8 block from doc_sync.py still left this self-test reporting PASS, exit 0.
+printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a 10-node topology.\n' > "$tmp/CLAUDE.md"
 # setup-guide.md claiming a route that does not exist => the OTHER direction of
 # D5 (phantom), which the old stub tree never exercised because the file was
 # absent and the cross-check short-circuited to "skipped".
@@ -86,6 +90,12 @@ grep -qF "definitely/not/a/real/route" "$stub_out" || {
 }
 if ! grep -qF "missing from setup-guide.md's REST section" "$stub_out" || ! grep -qF "/health" "$stub_out"; then
   echo "detection self-test: FAIL — D5 undocumented-route direction not exercised" >&2
+  cat "$stub_out" >&2; exit 1
+fi
+# D8's own positive case: the stub CLAUDE.md claims 10-node against a graph.py
+# (copied from the real repo above) that has 12 add_node() calls.
+if ! grep -qF "DRIFT [D8]" "$stub_out"; then
+  echo "detection self-test: FAIL — D8 node-count drift not detected" >&2
   cat "$stub_out" >&2; exit 1
 fi
 echo "detection self-test: PASS (D1 + D5 both directions detected by name, exit 2)"
