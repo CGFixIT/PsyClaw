@@ -43,10 +43,6 @@ dependencies = [
     "pyyaml==6.0.3",
     "numpy==1.26.4",
     "nltk==3.10.3",
-    # tzdata is required on Windows (and any host without a system IANA database)
-    # for zoneinfo to resolve IANA names such as America/New_York. Kept
-    # unconditional so OpenTweet scheduling tests behave identically across platforms.
-    "tzdata==2026.2",
     "langgraph==1.2.9",
     "langchain-core==1.5.0",
     # langgraph-sdk imports websockets.asyncio at graph import time; keep this direct
@@ -90,6 +86,12 @@ test = [
     # -c constraints.txt) cannot land on 2.9.0 (PYSEC-2023-117 / PYSEC-2026-2987).
     # Must match the requirements-test.txt / constraints.txt pin.
     "pygments==2.21.0",
+    # tzdata gives zoneinfo a PEP 615 fallback on hosts without a system IANA
+    # database (Windows), which the OpenTweet scheduling tests rely on. Test-only:
+    # no production module imports zoneinfo -- opentweet/runner.py uses
+    # datetime.astimezone(), which reads the host's local offset and needs no
+    # IANA tzdb. Must match the requirements-test.txt / constraints.txt pin.
+    "tzdata==2026.2",
 ]
 dev = [
     "ruff==0.16.1",

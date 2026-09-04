@@ -76,9 +76,10 @@ starlette==1.3.1
 rank-bm25==0.2.2
 numpy==1.26.4
 nltk==3.10.3
-# tzdata is required on Windows (and any host without a system IANA database) for
-# zoneinfo to resolve IANA names such as America/New_York. Kept unconditional so
-# OpenTweet scheduling tests behave identically across platforms.
+# tzdata gives zoneinfo a PEP 615 fallback on hosts without a system IANA database
+# (Windows), which the OpenTweet scheduling tests rely on. Installed from
+# requirements-test.txt / the pyproject `test` extra, not from requirements.txt --
+# no production module imports zoneinfo. Pinned here as a version ceiling only.
 tzdata==2026.2
 
 # embedding backend (minimum safe post CVE-2025-32434); CPU wheel via
