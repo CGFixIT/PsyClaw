@@ -1,10 +1,13 @@
 ---
 description: >-
   Verify CyClaw's four install surfaces (pyproject.toml+uv, requirements.txt+pip,
-  Dockerfile, environment.yml) actually agree AND are current against upstream
-  PyPI. Delegates static pin agreement to dep-guard, adds the requirements.txt
-  cross-check dep-guard skips, a real dry-run of each surface's install command,
-  and a PyPI currency + CVE sweep.
+  the Docker surface — Dockerfile + docker-compose.yml + .dockerignore +
+  publish-ghcr.yml — and environment.yml) actually agree AND are current against
+  upstream PyPI. Delegates static pin agreement to dep-guard, adds the
+  requirements.txt cross-check dep-guard skips, the install-surface scope
+  contract (constraints.txt is a version ceiling, not an install list), the
+  non-manifest drift checks E1–E6, a real dry-run of each surface's install
+  command, and a PyPI currency + CVE sweep. Never auto-bumps a runtime pin.
 ---
 
 Verify dependency pins are consistent across every install surface and current against upstream. $ARGUMENTS

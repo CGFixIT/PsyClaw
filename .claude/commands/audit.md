@@ -19,9 +19,13 @@ Run the CyClaw audit log analyzer. $ARGUMENTS
    cyclaw-metrics
    ```
 
-3. If `$ARGUMENTS` contains a date or time filter (e.g. "today", "last hour", "2026-06-20"), filter the JSONL before analysis:
+3. If `$ARGUMENTS` contains a date or time filter (e.g. "today", "last hour", "2026-06-20"),
+   filter AFTER the run, not before it. `metrics.py` takes no arguments and never reads
+   stdin -- `print_metrics()` resolves the log itself from `cfg["logging"]["audit_file"]` --
+   so piping into it is a silent no-op that re-reads the whole file. Scope the window by
+   grepping the raw log directly:
    ```bash
-   grep '"2026-06-20"' logs/audit.jsonl | python3 -m metrics
+   grep -c '"2026-06-20"' logs/audit.jsonl
    ```
 
 4. Report the following from the output:

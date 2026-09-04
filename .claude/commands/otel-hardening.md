@@ -1,14 +1,19 @@
 ---
 description: >-
-  Re-verify that CyClaw's telemetry-kill switches (utils/telemetry_kill.py, the
-  conditional HF Hub offline wiring in retrieval/embeddings.py) still actually
-  block every telemetry path for the dependency vendors CyClaw ships —
-  chromadb, langchain/langsmith/langgraph, huggingface_hub/transformers,
-  sentence-transformers, onnxruntime, opentelemetry, nemoguardrails — via a
-  static re-check plus a live web/forum search for vendor-side drift, then
-  propose or apply additive kill-switch fixes. Use when asked to audit/harden
-  telemetry, check for phone-home leaks, after bumping a vendor pin, or as a
-  periodic re-verification sweep.
+  Re-verify that CyClaw's telemetry-kill contract still holds end to end — the
+  canonical env maps in utils/telemetry_kill.py (telemetry vs. update-check,
+  visibly separate), the scrubbed credential/declarative-config names, the real
+  ONNX Runtime suppression (ORT_DISABLE_TELEMETRY before import + the
+  disable_telemetry_events() API at the load seams), and the process-boundary
+  delivery surfaces (Docker ENV/compose, macOS/PowerShell launchers, generated
+  launchd plists / Windows tasks / cron lines, agentic verifier children, gh
+  children) — via a static checker with an INDEPENDENT name→value oracle and a
+  category-1-to-5 egress classification of every dependency, provider,
+  executable, connector, scheduled job, and launcher. Then a live vendor-doc
+  sweep for drift since each control's last review date. Use when asked to
+  audit/harden/re-verify telemetry, check for phone-home leaks, after bumping
+  any telemetry-capable vendor pin, when adding a dependency or process
+  launcher (strict mode fails on an unclassified one), or as a standing sweep.
 ---
 
 Invoke the `otel-hardening` skill for the given task. $ARGUMENTS

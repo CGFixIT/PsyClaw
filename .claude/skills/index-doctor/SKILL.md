@@ -26,8 +26,8 @@ across the set. This skill wraps into one command what `run-cyclaw` and
 ### Step 0 — Ensure the venv is present
 
 The retrieval stack (torch CPU + chromadb + sentence-transformers) must be
-installed. In a fresh container it is not — install first via `/run-cyclaw` or
-`/sandbox-runtime-verification` (note the install order: `torch==2.13.0+cpu`
+installed. In a fresh container it is not — install first via `/CyClaw-Sandbox`
+(its Quick Mode, or `/run`) (note the install order: `torch==2.13.0+cpu`
 BEFORE `requirements.txt`, and `-c constraints.txt --ignore-installed PyYAML`).
 `doctor.py` exits 3 with a clear message if deps are missing.
 
