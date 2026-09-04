@@ -854,10 +854,11 @@ repos. Like `/fable-protocol`, it carries no authority over §3's invariants.
 
 ## 10. Session Protocol
 
-**Start.** The SessionStart hook injects the Python-coding-agent persona and (via
-`session-start-sync-check.sh`, if wired) pins the git identity and reports
-local↔remote divergence without mutating. If it did not run, set the identity
-yourself before any commit:
+**Start.** Two SessionStart hooks run: one injects the Python-coding-agent
+persona, and `session-start-sync-check.sh` (wired since 2026-09-04) pins the git
+identity and reports local↔remote divergence without ever mutating — it never
+resets, rebases, pushes or deletes, and always exits 0. If it did not run, set the
+identity yourself before any commit:
 
 ```bash
 git config user.email cyclaw-agent@users.noreply.github.com
