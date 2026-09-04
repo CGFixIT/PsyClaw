@@ -2,7 +2,7 @@
 """doc_sync.py – detect drift between CyClaw's code/config and its docs.
 
 Usage:
-    python .claude/skills/doc-sync/doc_sync.py [--repo-root PATH] [--json]
+    python .codex/skills/doc-sync/doc_sync.py [--repo-root PATH] [--json]
 
 Code is the source of truth; docs are derived. This script extracts facts from
 code/config and checks that the docs that cite them agree. It reports drift; it
@@ -17,10 +17,12 @@ Checks:
     D4  Banned-pattern count  the real banned_patterns length matches the "<n> patterns"
                               claims across CLAUDE.md, config.yaml, guardrails, fsconnect
     D5  Route table           gate.py @app routes are all named in CLAUDE.md
-    D6  Hook claims           doc claims about a "stop hook" are backed by .claude/settings.json
+    D6  Hook claims           doc claims about a "stop hook" are backed by .claude/settings.json,
+                              across CLAUDE.md, AGENTS.md and .claude/rules/PROJECT_RULES.md
     D7  M5 doctrine           docs/m5-48gb-coding-expectations.md cites the shipped
-                              local model tag, max_tokens, timeouts, max_context_tokens,
-                              and OLLAMA_CONTEXT_LENGTH (citation only; no arithmetic)
+                               local model tag, Ollama context budget, and timeout values
+    D8  Graph node count      the real graph.py add_node() count matches every "<n>-node"
+                              claim across the docs and agent-facing prompt files
 
 Exit codes (repo convention):
     0  no drift detected
@@ -30,10 +32,112 @@ Exit codes (repo convention):
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
 from pathlib import Path
+
+# Repo-relative path prefixes excluded from every "scan agent-facing prompts
+# for a stale count/claim" pass (D4, D6, D8). Shared across all three so the
+# same exclusion doesn't drift into three slightly different lists.
+#   - doc-sync's own directories: verify.sh's test fixtures are literal
+#     strings of the exact claims these checks look for, and scanning them
+#     makes the checker flag its own test data as live drift.
+#   - NEW_SKILL.md: a deliberately version-pinned snapshot ("Baseline of this
+#     document: main @ <hash>... Supersedes the <date> baseline") describing
+#     the repo as of a past commit. Its counts are correct FOR THAT BASELINE,
+#     not the current tree, so as soon as the real count changes again this
+#     file would otherwise be flagged and an agent misdirected to "fix" a
+#     historical record (Codex P2 on PR #1308).
+_AGENT_SCAN_EXCLUDE = (
+    ".claude/skills/doc-sync",
+    ".codex/skills/doc-sync",
+    ".codex/skills/Cyclaw-Sandbox/NEW_SKILL.md",
+)
+
+
+def _agent_scan_excluded(rel_path: str) -> bool:
+    return any(rel_path == p or rel_path.startswith(p + "/") for p in _AGENT_SCAN_EXCLUDE)
+
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.|\|)")
+
+
+def _claim_unit_bounds(text: str) -> list[tuple[int, int]]:
+    """Exact (start, end) spans of the "claim unit" each position in `text`
+    belongs to: a blank-line-delimited paragraph, further split into
+    one-line items when the paragraph is a list or a Markdown table (two or
+    more marker lines -- a bullet marker or a leading `|`) with no blank line
+    separating them -- adjacent, unrelated bullets or table rows otherwise
+    share one paragraph span and wrongly inherit each other's context (Codex
+    P2 on PR #1308: first bullets, now table rows -- "| Sanitizer enabled |
+    yes |" and an unrelated "| filename limit | 99 patterns |" with no blank
+    line between them). re.split() loses each separator's real length, so
+    spans are walked from the separator matches directly rather than
+    reconstructed from split() output.
+    """
+    bounds: list[tuple[int, int]] = []
+    pos = 0
+    for sep in re.finditer(r"\n\s*\n", text):
+        _add_paragraph_units(text, pos, sep.start(), bounds)
+        pos = sep.end()
+    _add_paragraph_units(text, pos, len(text), bounds)
+    return bounds
+
+
+def _add_paragraph_units(text: str, start: int, end: int, bounds: list[tuple[int, int]]) -> None:
+    lines = text[start:end].split("\n")
+    marker_idxs = [i for i, line in enumerate(lines) if _LIST_ITEM.match(line)]
+    if len(marker_idxs) < 2:
+        bounds.append((start, end))
+        return
+    line_offsets = []
+    pos = start
+    for line in lines:
+        line_offsets.append(pos)
+        pos += len(line) + 1
+    marker_offsets = [line_offsets[i] for i in marker_idxs]
+    # Introductory prose before the first marker ("CyClaw graph has 99
+    # nodes:\n- retrieve first\n- audit last") was silently dropped -- the
+    # loop below only ever started at marker_offsets[0], so a claim sitting
+    # in a list's own preamble had no unit at all and neither D4 nor D8
+    # could ever see it (Codex P2 on PR #1308). Give it its own unit.
+    if marker_offsets[0] > start:
+        bounds.append((start, marker_offsets[0]))
+    for i, mo in enumerate(marker_offsets):
+        item_end = marker_offsets[i + 1] if i + 1 < len(marker_offsets) else end
+        bounds.append((mo, item_end))
+
+
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+.*$", re.MULTILINE)
+
+
+def _nearest_heading(text: str, pos: int) -> str:
+    """The Markdown heading line (if any) nearest before `pos`, empty if
+    none. Section headings ("## CyClaw graph") establish the subject for
+    the claim units under them, which a claim-unit-only context check can't
+    see once the heading is its own separate unit (Codex P2 on PR #1308).
+    """
+    heading = ""
+    for m in _HEADING.finditer(text):
+        if m.start() >= pos:
+            break
+        heading = m.group(0)
+    return heading
+
+
+def _route_documented(route: str, text: str) -> bool:
+    """Whether `route` appears in `text` as a complete route token, not as a
+    prefix of a longer one. Plain substring containment let a documented
+    child route ("/auth/users/{username}/role") satisfy the check for its
+    own parent ("/auth/users") even when the parent was never separately
+    documented -- deleting both real "/auth/users" rows from CLAUDE.md still
+    reported "all routes named" (Codex P2 on PR #1308).
+    """
+    pattern = re.escape(route)
+    return re.search(rf"(?<![\w/{{}}-]){pattern}(?![\w/{{}}-])", text) is not None
+
 
 _drift: list[dict] = []
 
@@ -199,20 +303,64 @@ def main(argv: list[str] | None = None) -> int:
     # "consistent everywhere it's cited" -- the count is cited in a mermaid node
     # and a threat table, which no other check reads either. A blind spot in a
     # drift checker is worse than no checker, because it is trusted.
+    #
+    # Second round of the same lesson: .claude/** was still unscanned after the
+    # files above were added, so the fable-protocol skill and its command copy
+    # sat on a stale "32 banned_patterns" while this check again reported
+    # "consistent everywhere it's cited". Agent-facing prompt files are read by
+    # every session, so a wrong number there is repeated back with confidence.
     for opt in (
         "guardrails/rails.py", "agentic/fsconnect/client.py",
         "README.md", "docs/THREAT_MODEL.md", "INVARIANTS.md",
+        "AGENTS.md",
+        # D6 and D8 already scan the canonical Copilot prompt; D4 didn't, so a
+        # sanitizer-count claim delivered only to Copilot bypassed this check
+        # (Codex P2 on PR #1308).
+        ".github/copilot-instructions.md",
     ):
         fp = root / opt
         if fp.exists():
             cite_files[opt] = fp.read_text(encoding="utf-8")
+    # Agent-facing prompt/rule files. Globbed rather than listed because skills
+    # and commands are added routinely, and a new one citing the count must not
+    # need an edit here to be covered.
+    for sub in (".claude/skills", ".claude/commands", ".claude/rules", ".codex"):
+        base = root / sub
+        if base.is_dir():
+            for fp in sorted(base.rglob("*.md")):
+                rel = str(fp.relative_to(root))
+                if not _agent_scan_excluded(rel):
+                    cite_files[rel] = fp.read_text(encoding="utf-8")
+    # A bare "<n> patterns" claim is ambiguous outside CLAUDE.md/config.yaml --
+    # widening the scan to .codex/ surfaced a real unrelated claim ("17 patterns
+    # for matching filenames") that this same regex would flag as sanitizer
+    # drift (Codex P2 on PR #1308). Require the word to be spelled
+    # "banned_pattern(s)" (unambiguous on its own) OR sit near a sanitizer/
+    # injection-filter context word on the same line.
+    _pattern_context = re.compile(r"banned|sanitiz|injection", re.I)
     drift_files = []
     for name, text in cite_files.items():
-        # Find "<n> patterns" / "<n>-pattern" claims and check they equal real_n.
-        for m in re.finditer(r"(\d+)[\s-]+pattern", text):
+        unit_bounds = _claim_unit_bounds(text)
+        for m in re.finditer(r"(\d+)[\s-]+(?:(banned_)?pattern)", text):
             claimed = int(m.group(1))
-            if claimed != real_n and claimed > 5:  # ignore small unrelated numbers
+            if claimed == real_n or claimed <= 5:  # ignore small unrelated numbers
+                continue
+            if m.group(2):  # explicit "banned_pattern(s)" spelling, unambiguous
                 drift_files.append(f"{name} claims {claimed}")
+                continue
+            for start, end in unit_bounds:
+                if start <= m.start() < end:
+                    # Same heading-carry fallback as D8: "## Prompt-injection
+                    # sanitizer" followed by a separate "It has 99 patterns."
+                    # paragraph put the context word outside this claim's own
+                    # unit (Codex P2 on PR #1308).
+                    unit_context = _pattern_context.search(text[start:end])
+                    heading_context = not unit_context and _pattern_context.search(
+                        _nearest_heading(text, start)
+                    )
+                    if unit_context or heading_context:
+                        drift_files.append(f"{name} claims {claimed}")
+                    break
     if not drift_files:
         ok("D4", f"banned_patterns count {real_n} consistent everywhere it's cited")
     else:
@@ -222,20 +370,28 @@ def main(argv: list[str] | None = None) -> int:
     # ── D5 Route table ──────────────────────────────────────────────────────
     print("D5 gate.py routes -> CLAUDE.md + setup-guide.md")
     gate_src = (root / "gate.py").read_text(encoding="utf-8")
-    # gate_ops.py registers the four /ops/* routes onto gate.py's own app with
-    # the same @app.post decorator, just from inside a registration function.
-    # Reading only gate.py left those four unchecked in both directions.
-    ops_path = root / "gate_ops.py"
-    ops_src = ops_path.read_text(encoding="utf-8") if ops_path.exists() else ""
-    _decl = r'@app\.(?:get|post)\("([^"]+)"'
-    routes = sorted(set(re.findall(_decl, gate_src)) | set(re.findall(_decl, ops_src)))
+    # gate_ops.py / gate_auth.py / gate_memory.py each register their routes
+    # onto gate.py's own app with the same @app.get/@app.post decorators, just
+    # from inside a registration function. Reading only gate.py left those
+    # routes unchecked in both directions -- gate_auth.py added 2026-08-08 for
+    # docs/AUTHENTICATION_DESIGN.md Stage 2 (/auth/*); gate_memory.py added
+    # 2026-08-09 for the optional default-off memory admin surface
+    # (/memory/* + /query/export/html).
+    # Allow the path on the next line: `@app.post(\n        "/auth/..."`.
+    _decl = r'@app\.(?:get|post|delete|put|patch)\(\s*"([^"]+)"'
+    routes: set[str] = set(re.findall(_decl, gate_src))
+    for extra_module in ("gate_ops.py", "gate_auth.py", "gate_memory.py"):
+        extra_path = root / extra_module
+        if extra_path.exists():
+            routes |= set(re.findall(_decl, extra_path.read_text(encoding="utf-8")))
+    routes = sorted(routes)
     # Ignore the static mount and root; check the meaningful API routes.
     api_routes = [r for r in routes if r not in ("/",)]
-    missing = [r for r in api_routes if r not in claude]
+    missing = [r for r in api_routes if not _route_documented(r, claude)]
     if not missing:
         ok("D5", f"all {len(api_routes)} API routes named in CLAUDE.md")
     else:
-        note("D5", "gate.py/gate_ops.py @app decorators", f"routes absent from CLAUDE.md: {missing}")
+        note("D5", "gate.py/gate_ops.py/gate_auth.py/gate_memory.py @app decorators", f"routes absent from CLAUDE.md: {missing}")
 
     # setup-guide.md's REST section enumerates the same routes with runnable
     # curl invocations, so it drifts the same way CLAUDE.md's table does -- and
@@ -257,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
                  "route cross-check silently stopped covering anything")
         else:
             body = sec.group(0)
-            undocumented = [r for r in api_routes if r not in body]
+            undocumented = [r for r in api_routes if not _route_documented(r, body)]
             # Route-shaped tokens the guide claims: backticked table cells and
             # literal curl URLs against a loopback host:port.
             claimed = set(re.findall(r"`(/[A-Za-z0-9_/*-]*)`", body))
@@ -266,10 +422,19 @@ def main(argv: list[str] | None = None) -> int:
             # the point that they live on a DIFFERENT app and port. Those are
             # real routes, so validate them against harness/server.py rather
             # than either ignoring them (no coverage) or flagging them (noise).
-            harness_path = root / "harness" / "server.py"
-            harness_routes = set(
-                re.findall(_decl, harness_path.read_text(encoding="utf-8"))
-            ) if harness_path.exists() else set()
+            # server.py owns 23 of the 29 guarded routes; the other six
+            # (/api/agent/*) are in agent_routes.py and the /api/auth/*
+            # surface is in auth_routes.py. Reading only server.py meant a
+            # doc citing a REAL route from either of those was reported as a
+            # phantom -- a false positive in the one direction of D5 that
+            # nothing else covers.
+            harness_routes: set[str] = set()
+            for _hname in ("server.py", "agent_routes.py", "auth_routes.py"):
+                _hp = root / "harness" / _hname
+                if _hp.exists():
+                    harness_routes |= set(
+                        re.findall(_decl, _hp.read_text(encoding="utf-8"))
+                    )
             known = set(api_routes) | harness_routes | {"/", "/static/*"}
 
             def _known(token: str) -> bool:
@@ -289,28 +454,279 @@ def main(argv: list[str] | None = None) -> int:
                 ok("D5", f"setup-guide.md's REST section matches all {len(api_routes)} "
                          "routes, with no phantom routes")
             if undocumented:
-                note("D5", "gate.py/gate_ops.py @app decorators",
+                note("D5", "gate.py/gate_ops.py/gate_auth.py/gate_memory.py @app decorators",
                      f"routes missing from setup-guide.md's REST section: {undocumented}")
             if phantom:
-                note("D5", "gate.py/gate_ops.py @app decorators",
+                note("D5", "gate.py/gate_ops.py/gate_auth.py/gate_memory.py @app decorators",
                      f"setup-guide.md documents routes that do not exist in code: {phantom}")
 
     # ── D6 Stop-hook claims ─────────────────────────────────────────────────
     print("D6 Hook claims -> settings.json")
-    claims_stop_hook = "stop hook" in claude.lower()
     has_stop_hook = '"Stop"' in settings
-    # An accurate statement acknowledges the enforcement is applied by the
-    # session runtime rather than wired in repo settings.json. Only flag the
-    # NAIVE claim (implies a repo-wired hook) that no Stop hook backs.
-    acknowledges_runtime = bool(re.search(r"session runtime|not wired|runtime[- ]enforced", claude, re.I))
-    if claims_stop_hook and not has_stop_hook and not acknowledges_runtime:
+    # Two blind spots, both found the hard way: this check read CLAUDE.md
+    # ONLY, so PROJECT_RULES.md sat on a flat "the stop hook blocks
+    # --force-with-lease" while D6 reported clean -- exactly the claim it
+    # exists to catch. And the substring was "stop hook", which never matched
+    # the hyphenated "stop-hook" spelling CLAUDE.md itself uses. Every rule
+    # file that can make the claim is scanned now, and attribution is judged
+    # per file: one doc getting it right does not excuse another getting it
+    # wrong.
+    _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced", re.I)
+    # "host" added for the live wording "unless the host stop-hook demands
+    # otherwise" (fable-5.1-cc/SKILL.md) -- attributes enforcement outside
+    # the repo, same as "session runtime", just a different word for it. Kept
+    # SEPARATE from _runtime_attribution and proximity-anchored to the phrase
+    # itself: unlike "session runtime"/"not wired"/"runtime-enforced" (rare,
+    # distinctive phrases unlikely to appear coincidentally), "host" alone is
+    # an ordinary word ("...in this host repository") that a whole-unit
+    # search would wrongly treat as attribution no matter how far it sits
+    # from the actual claim (Codex P2 on PR #1308). This is NOT the general
+    # clause-attribution problem documented below as unsolvable: that one
+    # involved separating two DIFFERENT hook names at comparable distances;
+    # here both the false and true cases involve the same "host stop-hook"
+    # phrase, cleanly separated by adjacency (0 words) vs. not (5+ words).
+    _host_attribution = re.compile(
+        r"\bhost\W+(?:\w+\W+){0,2}?stop[- ]hook|stop[- ]hook\W+(?:\w+\W+){0,2}?\bhost\b", re.I
+    )
+    # Bare co-occurrence with "stop hook" was too broad: CLAUDE.md's own Kimi
+    # passage ("Kimi has neither the GitHub MCP tools nor the session
+    # stop-hook...") mentions the phrase while denying it applies, which is not
+    # the claim this check exists to catch and is not a "session runtime"-style
+    # qualifier either -- the paragraph-level fix from the previous round turned
+    # that true statement into a false positive against a canonical, accurate
+    # doc (Codex P2 on PR #1308). Narrowed to require an assertive control verb
+    # near the phrase, which is what actually distinguishes a claim of
+    # enforcement ("the stop hook blocks...", "...the stop hook requires...")
+    # from prose that merely mentions or denies one.
+    # Verb list widened once for passive/synonymous enforcement forms found
+    # live ("Force pushes are blocked by the stop hook", "The stop hook
+    # demands a pinned identity") -- "blocked" (past participle, missed by
+    # "blocks?") and "demands?" (a synonym the original five verbs didn't
+    # cover). Not chasing every further synonym: this is a bounded,
+    # documented vocabulary, not an attempt at general enforcement-language
+    # detection.
+    _CONTROL_VERBS = r"blocks?|blocked|enforces?|enforced|requires?|required|prevents?|prevented|rejects?|rejected|demands?"
+    _stop_hook_claim = re.compile(
+        rf"stop[- ]hook\W+(?:\w+\W+){{0,6}}?(?:{_CONTROL_VERBS})"
+        rf"|(?:{_CONTROL_VERBS})(?:\W+\w+){{0,6}}?\W+stop[- ]hook",
+        re.I,
+    )
+    hook_docs = {"CLAUDE.md": claude}
+    for opt in (
+        "AGENTS.md", ".claude/rules/PROJECT_RULES.md",
+        # The canonical GitHub Copilot prompt -- D8 already scans it (a fourth
+        # agent surface alongside Claude/.codex); D6 needs the same coverage or
+        # an unsupported hook claim delivered to Copilot bypasses the checker
+        # entirely (Codex P2 on PR #1308).
+        ".github/copilot-instructions.md",
+    ):
+        fp = root / opt
+        if fp.exists():
+            hook_docs[opt] = fp.read_text(encoding="utf-8")
+    # doc-sync's own verify.sh (both trees) embeds the exact claim/attribution
+    # strings D6 looks for, as literal test-fixture printf data -- scanning
+    # its own directory makes the checker self-flag on its own test data, not
+    # a real agent-facing claim. Shares _AGENT_SCAN_EXCLUDE with D4/D8.
+    for sub in (".claude/skills", ".claude/commands", ".codex"):
+        base = root / sub
+        if base.is_dir():
+            for fp in sorted(base.rglob("*.md")):
+                rel = fp.relative_to(root).as_posix()
+                if not _agent_scan_excluded(rel):
+                    hook_docs[rel] = fp.read_text(encoding="utf-8")
+            # Skill shell scripts carry the same enforcement claims as their
+            # SKILL.md (bootstrap.sh:9 "pins the git identity the stop hook
+            # requires"), and a *.md-only glob left them unscanned (Codex P2
+            # on PR #1308).
+            for fp in sorted(base.rglob("*.sh")):
+                rel = fp.relative_to(root).as_posix()
+                if not _agent_scan_excluded(rel):
+                    hook_docs[rel] = fp.read_text(encoding="utf-8")
+    # Per-claim-unit, not per-sentence: plain "split on sentence punctuation"
+    # still failed on markdown bullet lists, which often carry no terminal
+    # punctuation at all. Codex reproduced it with two adjacent bullets --
+    # "- The stop hook blocks force pushes" / "- The pre-commit hook is not
+    # wired" -- which sentence-splitting left as ONE unit (no ".", "!" or "?"
+    # between them), so the second bullet's qualifier excused the first
+    # bullet's unrelated claim. A paragraph that looks like a list (two or
+    # more lines starting with a list marker) is split by list item instead:
+    # each new marker line starts a fresh unit, and any following
+    # continuation line (no marker) folds into the item above it, so a single
+    # wrapped bullet still reads as one claim. A paragraph that is plain
+    # prose (fewer than two marker lines) keeps the sentence split from the
+    # previous round, since CLAUDE.md's real hand-wrapped sentences rely on
+    # exactly that: the claim and its attribution sit on different raw lines
+    # of the same soft-wrapped sentence, and splitting by raw line there
+    # would separate them incorrectly.
+    _sentence_split = re.compile(r"(?<=[.!?])\s+")
+    _list_item = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
+    def _claim_units(text: str) -> list[str]:
+        units: list[str] = []
+        for para in re.split(r"\n\s*\n", text):
+            lines = para.split("\n")
+            if sum(1 for line in lines if _list_item.match(line)) >= 2:
+                current: list[str] = []
+                for line in lines:
+                    if _list_item.match(line) and current:
+                        units.append(" ".join(current))
+                        current = [line]
+                    else:
+                        current.append(line)
+                if current:
+                    units.append(" ".join(current))
+            else:
+                units.extend(_sentence_split.split(para))
+        return units
+    # KNOWN LIMIT (Codex P2 on PR #1308, deliberately NOT "fixed" further):
+    # whole-unit attribution lets an unrelated qualifier on a DIFFERENT hook
+    # excuse a real claim about the stop hook -- "The pre-commit hook is not
+    # wired, but the stop hook blocks force pushes." carries both "not wired"
+    # and "stop hook...blocks" in one sentence, and "not wired" describes the
+    # pre-commit hook, not this one. A character/word-proximity anchor to the
+    # "stop hook" phrase does NOT fix this: measured on this exact sentence
+    # pair, the malicious qualifier sits 10 chars from "stop hook" while the
+    # legitimate one in CLAUDE.md's real "if applied by the session runtime"
+    # phrasing sits 38 chars away -- no fixed window excludes the first
+    # without also excluding the second. Correctly scoping a qualifier to its
+    # subject needs a real dependency parse, not a regex window; this
+    # checker's remit is mechanical fact-checking (see SKILL.md), not NLP.
+    # Rather than ship a change that only moves which sentence shape slips
+    # through, this is accepted as a precision limit: a sentence naming TWO
+    # hooks with different enforcement claims in one unit can still bypass
+    # D6. Split such a sentence into two during Step 3's manual pass if one
+    # is ever found.
+    def _naive_claims(text: str) -> list[str]:
+        return [
+            unit for unit in _claim_units(text)
+            if _stop_hook_claim.search(unit)
+            and not _runtime_attribution.search(unit)
+            and not _host_attribution.search(unit)
+        ]
+    naive_docs = [name for name, text in hook_docs.items() if _naive_claims(text)]
+    claiming_docs = [n for n, t in hook_docs.items() if _stop_hook_claim.search(t)]
+    if naive_docs and not has_stop_hook:
         note("D6", ".claude/settings.json (no Stop hook wired)",
-             "CLAUDE.md references a 'stop hook' as if repo-wired, but settings.json wires no "
-             "Stop hook — wire it, or state that the enforcement is applied by the session runtime")
-    elif claims_stop_hook and has_stop_hook:
-        ok("D6", "stop-hook claim backed by a wired Stop hook")
+             f"{', '.join(naive_docs)} reference a 'stop hook' as if repo-wired, but "
+             "settings.json wires no Stop hook — wire it, or state that the enforcement is "
+             "applied by the session runtime")
+    elif claiming_docs and has_stop_hook:
+        ok("D6", f"stop-hook claim backed by a wired Stop hook ({len(claiming_docs)} doc(s) cite it)")
     else:
-        ok("D6", "stop-hook claim absent or accurately attributed to the runtime")
+        ok("D6", f"stop-hook claim absent or accurately attributed to the runtime ({len(hook_docs)} rule file(s) scanned)")
+
+    # ── D8 Graph node count ─────────────────────────────────────────────────
+    print("D8 Graph node count -> graph.py add_node()")
+    graph_path = root / "graph.py"
+    # A missing graph.py must never take the checker outside its documented 0/2/3
+    # exit contract. Reading it unconditionally crashed with a traceback and exit 1
+    # on any tree without it -- including verify.sh's own D7 fixture, where the
+    # surrounding `|| true` hid the crash and the self-test still reported success
+    # (Codex P2 on PR #1308). Absence is reported as drift below, not ok() --
+    # graph.py is the core policy file, and silently succeeding when it is missing
+    # would hide exactly the failure this check exists to catch.
+    graph_src = graph_path.read_text(encoding="utf-8") if graph_path.exists() else None
+    graph_tree = None
+    if graph_src is not None:
+        # ast, not a regex: a textual `.add_node(` count includes comments and
+        # string literals, so documenting a retired registration in a comment
+        # (e.g. "# Retired: graph.add_node(...)") silently inflates the reported
+        # topology (Codex P2 on PR #1308). Counting actual Call nodes whose
+        # attribute is add_node only sees executable code. A SyntaxError is
+        # treated the same as a missing file below -- falling back to the regex
+        # here would silently reintroduce the exact bug this fix closes.
+        try:
+            graph_tree = ast.parse(graph_src, filename=str(graph_path))
+        except SyntaxError:
+            graph_tree = None
+    if graph_src is None or graph_tree is None:
+        # graph.py is the core policy file, not an optional citation like D7's M5
+        # doctrine inputs -- treating its absence as ok() understated the same
+        # comment's own "absent-safe like D7" claim: D7 reports an unreadable input
+        # via note() (a drift item), not ok(). An incomplete checkout, an
+        # accidental rename/deletion, or a syntax error in graph.py should all read
+        # the same way, not as success (Codex P2 on PR #1308).
+        reason = "graph.py not found" if graph_src is None else "graph.py does not parse as Python"
+        note("D8", "graph.py", f"{reason} -- node-count cross-check could not run")
+        real_nodes = 0
+        graph_src = None  # normalizes both failure branches below
+    else:
+        real_nodes = sum(
+            1
+            for node in ast.walk(graph_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_node"
+        )
+    if graph_src is not None and real_nodes == 0:
+        note("D8", "graph.py .add_node() calls", "no add_node() calls found — parser or graph.py changed shape")
+    elif graph_src is not None:
+        # Same shape as D4, and added for the same reason: four separate docs
+        # (a command doc, its .codex mirror, a work note and a NeMo phase doc)
+        # all sat on "10-node" after the two pre_action_hook_* nodes landed,
+        # while nothing checked the claim. A number repeated across agent-facing
+        # files is exactly what a mechanical check is for.
+        node_files = {"CLAUDE.md": claude}
+        for opt in (
+            "README.md", "AGENTS.md", "INVARIANTS.md", "docs/THREAT_MODEL.md",
+            # The canonical GitHub Copilot prompt -- a fourth agent surface
+            # alongside Claude/.codex, easy to forget precisely because nothing
+            # else in this file scans it (Codex P2 on PR #1308).
+            ".github/copilot-instructions.md",
+        ):
+            fp = root / opt
+            if fp.exists():
+                node_files[opt] = fp.read_text(encoding="utf-8")
+        # Scope is deliberately the live authorities + agent-facing prompt files,
+        # the same set D4 settled on -- NOT docs/** wholesale. Dated audits,
+        # archived memories and superseded NeMo phase plans correctly describe
+        # the graph as it was when they were written; flagging them would make
+        # D8 fire 17 times on a healthy tree and be ignored within a week.
+        for sub in (".claude/skills", ".claude/commands", ".claude/rules", ".codex"):
+            base = root / sub
+            if base.is_dir():
+                for fp in sorted(base.rglob("*.md")):
+                    rel = str(fp.relative_to(root))
+                    if not _agent_scan_excluded(rel):
+                        node_files[rel] = fp.read_text(encoding="utf-8")
+        # Same context-requirement pattern as D4: an exact "<n> nodes" claim
+        # is ambiguous on its own -- generic sizing advice unrelated to
+        # CyClaw ("split workflows larger than 99 nodes") matches just as
+        # well as a real topology claim, and both of this repo's genuine
+        # catches ("LangGraph 10-node security topology (`graph.py`)")
+        # happen to name the graph right next to the count anyway (Codex P2
+        # on PR #1308, the approximate-count exclusion's sequel).
+        # Bare "graph"/"topology" is too generic on its own -- "The
+        # dependency graph has 99 nodes" is unrelated technical guidance that
+        # happens to use the word "graph". Require a token that actually
+        # names CyClaw's own graph.
+        _node_context = re.compile(r"langgraph|cyclaw|graph\.py", re.I)
+        node_drift = []
+        for name, text in node_files.items():
+            unit_bounds = _claim_unit_bounds(text)
+            for m in re.finditer(r"(~\s?)?(\d+)[\s-]+nodes?\b", text, re.I):
+                # A leading "~" is generic sizing advice ("avoid monolithic
+                # graphs beyond ~10 nodes"), not a claim about CyClaw's own
+                # topology -- python-coding-agent/SKILL.md:241 triggered a
+                # false positive here (Codex P2 on PR #1308) because the
+                # regex had no way to distinguish "~10 nodes" from "10-node".
+                if m.group(1):
+                    continue
+                if int(m.group(2)) == real_nodes:
+                    continue
+                for start, end in unit_bounds:
+                    if start <= m.start() < end:
+                        unit_context = _node_context.search(text[start:end])
+                        heading_context = not unit_context and _node_context.search(
+                            _nearest_heading(text, start)
+                        )
+                        if unit_context or heading_context:
+                            node_drift.append(f"{name} claims {m.group(2)}-node")
+                        break
+        if node_drift:
+            note("D8", f"graph.py has {real_nodes} add_node() calls",
+                 f"stale graph node-count claims: {sorted(set(node_drift))}")
+        else:
+            ok("D8", f"node count {real_nodes} consistent across {len(node_files)} scanned file(s)")
 
     result = {"drift_count": len(_drift), "drift": _drift}
     if args.json:

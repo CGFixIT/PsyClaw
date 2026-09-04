@@ -21,8 +21,9 @@ without copying a second parser or treating prose as executable truth.
    ```
 
    It validates skill inventory, console entry points, documented config
-   values, sanitizer-pattern counts, route coverage, and hook claims. Exit 0
-   means no mechanical drift; it does not prove every prose assertion.
+   values, sanitizer-pattern counts, route coverage, hook claims, and graph
+   node-count claims. Exit 0 means no mechanical drift; it does not prove
+   every prose assertion.
 3. Perform a bounded manual pass where the change reaches: command docs versus
    implementation, install docs versus manifests/workflows, `AGENTS.md` versus
    `CLAUDE.md`, routines/prompts/checklists versus active Codex behavior, and

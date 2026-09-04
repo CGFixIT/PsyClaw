@@ -41,6 +41,7 @@ them wrongly. Exit `0` no drift · `2` drift found · `3` env error.
 | D5 | `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py` `@app` routes | Every API route is named in CLAUDE.md, and `setup-guide.md`'s REST section matches (both directions: undocumented and phantom routes) |
 | D6 | `.claude/settings.json` hooks | A "stop hook" claim is either backed by a wired Stop hook or accurately attributed to the session runtime |
 | D7 | `config.yaml` + `macos/ollama-mlx.env` | `docs/m5-48gb-coding-expectations.md` cites the shipped local model tag, `max_tokens`, timeouts, `max_context_tokens`, and `OLLAMA_CONTEXT_LENGTH`. Citation only; the no-stall inequality lives in config-guard C12 and `tests/test_m5_ollama_runtime_contract.py` |
+| D8 | `graph.py` `add_node()` calls (AST-counted) | Every "`<n>`-node"/"`<n>` nodes" claim across CLAUDE.md, docs, and agent-facing prompt files matches the real count. Excludes approximate ("`~10` nodes") sizing advice and version-pinned snapshot docs |
 
 ### Step 2 — Reconcile each mechanical drift item
 
@@ -54,6 +55,8 @@ keeps the history reviewable. Examples of the fix direction:
 - D6 → reword the doc to say the enforcement is applied by the session runtime
   (not wired in repo `settings.json`), OR wire the hook if that is the intent —
   the latter is a settings change, so confirm with the user first.
+- D8 → replace the stale node-count claim with the real `graph.py` count
+  (never edit `graph.py` to match the doc).
 
 ### Step 3 — Manual pass for prose claims the checker can't parse
 
@@ -123,7 +126,7 @@ Seed list so the first run has context — reconcile these:
   but-absent behavior is a user decision — flag it, don't "make it true" by
   editing config or code under the guise of a doc sync.
 - **Never edit `config.yaml` values, graph edges, or code to silence a drift
-  line.** D3/D4/D5/D7 drift is fixed in the doc, not the source.
+  line.** D3/D4/D5/D7/D8 drift is fixed in the doc, not the source.
 - Wiring a hook (to resolve D6 by making the claim true) is a `settings.json`
   change — confirm with the user first.
 
