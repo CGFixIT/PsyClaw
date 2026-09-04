@@ -223,11 +223,18 @@ async function logout() {
   try {
     const response = await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
     if (!response.ok) {
-      // Keep csrfToken: a 401/403 did not revoke the session. Clearing it
-      // here made whoami look logged-in with a null CSRF (Users writes 403).
+      // Do not clear CSRF before whoami: that painted logged-in with a
+      // dead token (Users writes 403). On 401/403 the header is already
+      // rejected (rotated in another tab, or no session); whoami rotates
+      // cookie-session CSRF and returns the new plaintext so retries
+      // and Users writes can succeed.
+      const rejected = 'logout rejected (' + response.status + ')';
+      if (response.status === 401 || response.status === 403) {
+        await refreshAuthUi();
+      }
       if (authStatus) {
-        if (authSessionBox) authSessionBox.hidden = false;
-        authStatus.textContent = 'logout rejected (' + response.status + ')';
+        if (csrfToken && authSessionBox) authSessionBox.hidden = false;
+        authStatus.textContent = rejected;
       }
       return;
     }

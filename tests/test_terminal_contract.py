@@ -222,11 +222,16 @@ def test_whoami_success_stores_rotated_csrf():
 
 
 def test_logout_honors_non_ok_http_status():
-    """A failed logout must not clear csrfToken then ask whoami.
+    """A failed logout must not null csrfToken then whoami, but 401/403 must refresh.
 
     Issue #1298 N4: the terminal always nulled csrfToken after the fetch,
     even on 401/403. whoami then painted logged-in with a dead CSRF.
-    Harness already checks response.ok; this is the terminal path.
+
+    Codex P2 on PR #1313: a 403 is CSRF mismatch (token already rotated in
+    another tab). Returning while keeping the rejected token skips the
+    whoami rotate-and-return path, so retries and Users writes stay 403
+    until a full reload. Refresh auth/CSRF on 401/403 without assigning
+    null first; restore the rejected status line after whoami overwrites it.
     """
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     body = js.split("async function logout(", 1)
@@ -236,7 +241,20 @@ def test_logout_honors_non_ok_http_status():
     assert after.index("if (!response.ok)") < after.index("csrfToken = null"), (
         "logout must keep csrfToken when the server rejected the request"
     )
-    assert "return;" in after.split("if (!response.ok)", 1)[1].split("csrfToken = null", 1)[0]
+    rejected_block = after.split("if (!response.ok)", 1)[1].split("} catch", 1)[0]
+    assign_null = [ln for ln in rejected_block.splitlines() if ln.strip().startswith("csrfToken = null")]
+    assert not assign_null, (
+        "rejected logout must not null csrfToken before (or instead of) whoami refresh"
+    )
+    assert "response.status === 401" in rejected_block
+    assert "response.status === 403" in rejected_block
+    assert "refreshAuthUi()" in rejected_block, (
+        "401/403 logout must refresh auth/CSRF from whoami rather than keep the rejected token"
+    )
+    assert rejected_block.index("refreshAuthUi()") < rejected_block.index("authStatus.textContent = rejected"), (
+        "restore the rejected status line after whoami overwrites it with username · role"
+    )
+    assert "return;" in rejected_block
 
 
 def test_login_form_controls_exist():
