@@ -586,13 +586,30 @@ def test_harness_confirmed_unauthenticated_state_clears_cached_identity():
 
 
 def test_harness_logout_reports_rejected_responses_without_clearing_controls():
-    """A stale CSRF or rate-limit response should remain actionable instead
-    of silently repainting the same authenticated session after refresh."""
+    """A stale CSRF or rate-limit response should remain actionable.
+
+    On 401/403, refreshHarnessAuth() (whoami) must run without clearing the
+    page CSRF first; the rejected status line is restored after whoami would
+    overwrite it. Other non-2xx still skip refresh. Success still refreshes.
+    """
     html = _HARNESS_HTML.read_text(encoding="utf-8")
     logout_handler = html.split("if (hAuthLogout) {", 1)[1].split("const hAuthSetupBtn", 1)[0]
     assert "if (!response.ok)" in logout_handler
-    assert "logout rejected (" in logout_handler
-    assert logout_handler.index("if (!response.ok)") < logout_handler.index("await refreshHarnessAuth();")
+    rejected_block = logout_handler.split("if (!response.ok)", 1)[1].split("} catch", 1)[0]
+    assign_clear = [
+        ln for ln in rejected_block.splitlines()
+        if "CSRF_TOKEN" in ln and ("= ''" in ln or "= null" in ln)
+    ]
+    assert not assign_clear, "rejected logout must not clear the page CSRF token"
+    assert "response.status === 401" in rejected_block
+    assert "response.status === 403" in rejected_block
+    assert "refreshHarnessAuth()" in rejected_block
+    assert rejected_block.index("refreshHarnessAuth()") < rejected_block.index("who.textContent = rejected")
+    assert "window.__cyclawRole = null;" not in rejected_block
+    assert "setHarnessLogoutVisible(false);" not in rejected_block
+    assert "return;" in rejected_block
+    after_catch = logout_handler.split("} catch", 1)[1]
+    assert "await refreshHarnessAuth();" in after_catch
 
 
 def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
