@@ -82,15 +82,17 @@ Slash commands (type `/help` in the console):
 
 | Command | Action |
 |---|---|
+| `/help` | list the available commands |
 | `/session new\|list\|use\|rename\|info` | chat session management |
 | `/soul on\|off\|status` | include the governed soul in the system prompt (read-only; `soul.md` writes stay with `utils.personality`) |
 | `/memory [on\|off\|add\|forget\|clear]` | operator notes in the system prompt (**off by default**; not RAG `memory/`, not `soul.md`) |
+| `/api [set <KEY> <value>]` | view or store allowlisted CyClaw API keys in `$CYCLAW_HOME/.env` (mode 600 on POSIX); file-only, so a write reports `restart_required` — see `harness/README.md` § `/api` |
 | `/goal [text]\|clear` | session-scoped intent, injected into the chat prompt (not a write authorization) |
 | `/loop [n]\|stop\|auto` | human-gated chat turns toward `/goal` (never starts `/api/agent/*`) |
 | `/model [use <name>]` | show / select the local model |
 | `/skills [all\|<name>]` | wiring diagram of skills this console actually injects or runs as `/agent checks` |
 | `/tools [all\|<name>]` | wiring diagram of harness routes that are registered; MCP `hybrid_search` is catalog-only |
-| `/web [on\|off\|allow\|fetch\|search]` | allowlist-only GET; **off by default**; no search engine, no browser |
+| `/web [on\|off\|allow\|deny\|fetch\|search\|inject\|forget]` | allowlist-only GET; **off by default**; no search engine, no browser |
 | `/connectors` | connector catalog |
 | `/github` | agentic GitHub status (read-only subprocess) |
 | `/agent run\|plan\|read\|confirm\|cancel` | stage, refine, authorize, or discard a real-repo coding run |
@@ -178,14 +180,16 @@ read-only.
 
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
 - Every state-changing route under `/api/*` — session create/rename/goal,
-  `/api/soul`, `/api/model`, `/api/memory*`, `/api/web*`, `/api/chat` +
+  `/api/soul`, `/api/model`, `POST /api/memory` and its sub-routes, `POST /api/web`
+  and its six sub-routes (`GET /api/web` is deliberately open so the console can
+  boot), `/api/chat` +
   `/api/chat/cancel`, `POST /api/keys` (writes credentials into
   `$CYCLAW_HOME/.env`), and all six `/api/agent/*` run routes (`run`,
   `runs/{id}`, `runs/{id}/decision`, `runs/{id}/push`, `runs/{id}/publish`,
   `runs/{id}/discard`) — plus the reads that return more than a summary,
   `GET /api/sessions/{session_id}` (full message content, unlike the
-  title-only list at `GET /api/sessions`), `GET /api/keys` (which credentials
-  are set, plus a masked tail — never a value), and `GET /api/github/status`,
+  title-only list at `GET /api/sessions`), `GET /api/memory`, `GET /api/keys` (which
+  credentials are set, plus a masked tail — never a value), and `GET /api/github/status`,
   require a Bearer `CYCLAW_API_KEY` — the same variable the gateway's
   `/soul` and `/ops/*` endpoints use. **Fail-closed:** an unset key means
   those routes return 401, not "no auth required" — with one deliberate
@@ -227,6 +231,12 @@ read-only.
   the parent `PATH`, and nothing downstream inspects `argv[0]`, so accepting a
   caller-supplied command would make an authenticated route a remote shell.
 - `run_id` is validated as anchored 32-char lowercase hex at the HTTP boundary,
-  before it can become a `--run-id=` argv element, and branch names must be in
-  the `claude/` namespace.
+  before it can become a `--run-id=` argv element, and branch names must use one of
+  the accepted vendor prefixes — `claude/`, `codex/`, `grok/`, `kimi/`, `CyClaw/`,
+  `cyclaw/`, `agent/`, plus any `CYCLAW_AGENT_BRANCH_PREFIX` override — validated
+  against `utils/agent_identity.BRANCH_NAME_RE`.
+- A named-capability **ToolBroker** gate (`utils.tool_broker.assert_allowed`) sits
+  inside `/api/chat` when `loop: true`, inside the agent-run route, and inside `/web`
+  fetches. A denied capability is `403 TOOL_DENIED` and is audited. It is independent
+  of the API key and the CSRF check — passing those does not pass this.
 - The console renders all model output via `textContent` (no HTML injection).
