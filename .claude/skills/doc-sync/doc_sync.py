@@ -350,10 +350,20 @@ def main(argv: list[str] | None = None) -> int:
         fp = root / opt
         if fp.exists():
             hook_docs[opt] = fp.read_text(encoding="utf-8")
-    naive_docs = [
-        name for name, text in hook_docs.items()
-        if _stop_hook_claim.search(text) and not _runtime_attribution.search(text)
-    ]
+    # Per-paragraph, not per-document: a document-wide "does the qualifier appear
+    # ANYWHERE" check means one correctly-attributed mention excuses a separate,
+    # unqualified claim elsewhere in the same file -- exactly the failure mode that
+    # matters most for CLAUDE.md, which is long-lived and already carries one
+    # correct mention (Codex P2 on PR #1308). Split on blank lines and judge each
+    # paragraph on its own: a paragraph that mentions a stop hook without the
+    # qualifier IN THAT SAME PARAGRAPH is naive, regardless of what a different
+    # paragraph says.
+    def _naive_paragraphs(text: str) -> list[str]:
+        return [
+            para for para in re.split(r"\n\s*\n", text)
+            if _stop_hook_claim.search(para) and not _runtime_attribution.search(para)
+        ]
+    naive_docs = [name for name, text in hook_docs.items() if _naive_paragraphs(text)]
     claiming_docs = [n for n, t in hook_docs.items() if _stop_hook_claim.search(t)]
     if naive_docs and not has_stop_hook:
         note("D6", ".claude/settings.json (no Stop hook wired)",
@@ -368,15 +378,22 @@ def main(argv: list[str] | None = None) -> int:
     # ── D8 Graph node count ─────────────────────────────────────────────────
     print("D8 Graph node count -> graph.py add_node()")
     graph_path = root / "graph.py"
-    # Absent-safe like D7's doctrine inputs: a missing graph.py is an unreadable
-    # input, not drift, and must never take the checker outside its documented
-    # 0/2/3 exit contract. Reading it unconditionally crashed with a traceback
-    # and exit 1 on any tree without it -- including verify.sh's own D7 fixture,
-    # where the surrounding `|| true` hid the crash and the self-test still
-    # reported success (Codex P2 on PR #1308).
+    # A missing graph.py must never take the checker outside its documented 0/2/3
+    # exit contract. Reading it unconditionally crashed with a traceback and exit 1
+    # on any tree without it -- including verify.sh's own D7 fixture, where the
+    # surrounding `|| true` hid the crash and the self-test still reported success
+    # (Codex P2 on PR #1308). Absence is reported as drift below, not ok() --
+    # graph.py is the core policy file, and silently succeeding when it is missing
+    # would hide exactly the failure this check exists to catch.
     graph_src = graph_path.read_text(encoding="utf-8") if graph_path.exists() else None
     if graph_src is None:
-        ok("D8", "graph.py absent -- node-count cross-check skipped")
+        # graph.py is the core policy file, not an optional citation like D7's M5
+        # doctrine inputs -- treating its absence as ok() understated the same
+        # comment's own "absent-safe like D7" claim: D7 reports an unreadable input
+        # via note() (a drift item), not ok(). An incomplete checkout or an
+        # accidental rename/deletion of graph.py should read the same way, not as
+        # success (Codex P2 on PR #1308).
+        note("D8", "graph.py", "graph.py not found -- node-count cross-check could not run")
         real_nodes = 0
     else:
         real_nodes = len(re.findall(r"\.add_node\(", graph_src))

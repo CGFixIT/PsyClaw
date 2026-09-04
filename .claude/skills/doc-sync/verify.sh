@@ -43,6 +43,13 @@ cp "$repo_root"/config.yaml "$repo_root"/pyproject.toml "$repo_root"/gate.py "$t
 for extra in gate_ops.py gate_auth.py gate_memory.py graph.py; do
   [ -f "$repo_root/$extra" ] && cp "$repo_root/$extra" "$tmp"/
 done
+
+# Derive a fixture value for D8 that is guaranteed stale, rather than a
+# hardcoded "10" -- if graph.py legitimately reaches 10 add_node() calls one
+# day, a hardcoded 10 stops being stale and the DRIFT [D8] assertion below
+# would fail even on a correctly working checker (Codex P2 on PR #1308).
+real_node_count=$(grep -c '\.add_node(' "$repo_root/graph.py")
+stale_node_count=$((real_node_count + 1))
 mkdir -p "$tmp/.claude" "$tmp/harness"
 cp "$repo_root"/.claude/settings.json "$tmp/.claude/"
 cp -r "$repo_root"/.claude/skills "$tmp/.claude/"
@@ -54,7 +61,7 @@ done
 # without ever planting a stale claim against it meant this self-test never
 # exercised D8 at all. Confirmed by Codex reviewing PR #1308: deleting the entire
 # D8 block from doc_sync.py still left this self-test reporting PASS, exit 0.
-printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a 10-node topology.\n' > "$tmp/CLAUDE.md"
+printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a %s-node topology.\n' "$stale_node_count" > "$tmp/CLAUDE.md"
 # setup-guide.md claiming a route that does not exist => the OTHER direction of
 # D5 (phantom), which the old stub tree never exercised because the file was
 # absent and the cross-check short-circuited to "skipped".
