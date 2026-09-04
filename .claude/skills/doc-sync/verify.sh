@@ -29,21 +29,49 @@ echo "checker ran on live tree (exit $rc; drift on live tree is expected)"
 
 # 2. Detection self-test: build a temp tree whose CLAUDE.md omits a real skill
 #    and a real route, and confirm the checker flags drift (exit 2).
+#
+#    The assertion is per-check, not a bare "exit != 0". The stub tree used to
+#    omit setup-guide.md, docs/ and macos/, so D7's "could not read M5 doctrine
+#    inputs" alone satisfied a bare non-zero exit -- D1 and D5 detection could
+#    have been completely broken and this test would still have passed. It now
+#    copies the route modules and setup-guide.md and asserts on the specific
+#    DRIFT [D1] and DRIFT [D5] strings, both directions of D5 included.
 tmp="$(mktemp -d)"
 d7tmp=""
 trap 'rm -rf "$tmp" "$d7tmp"' EXIT
 cp "$repo_root"/config.yaml "$repo_root"/pyproject.toml "$repo_root"/gate.py "$tmp"/
-mkdir -p "$tmp/.claude"
+for extra in gate_ops.py gate_auth.py gate_memory.py graph.py; do
+  [ -f "$repo_root/$extra" ] && cp "$repo_root/$extra" "$tmp"/
+done
+mkdir -p "$tmp/.claude" "$tmp/harness"
 cp "$repo_root"/.claude/settings.json "$tmp/.claude/"
 cp -r "$repo_root"/.claude/skills "$tmp/.claude/"
+for h in server.py agent_routes.py auth_routes.py; do
+  [ -f "$repo_root/harness/$h" ] && cp "$repo_root/harness/$h" "$tmp/harness/"
+done
 # A CLAUDE.md that mentions almost nothing => guaranteed D1/D5 drift.
 printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n' > "$tmp/CLAUDE.md"
+# setup-guide.md claiming a route that does not exist => the OTHER direction of
+# D5 (phantom), which the old stub tree never exercised because the file was
+# absent and the cross-check short-circuited to "skipped".
+printf '# setup-guide\n\n## REST API\n\n`/definitely/not/a/real/route`\n' > "$tmp/setup-guide.md"
 
-if "$PY" "$checker" --repo-root "$tmp" >/dev/null 2>&1; then
+stub_out="$tmp/_out.txt"
+"$PY" "$checker" --repo-root "$tmp" > "$stub_out" 2>&1 && {
   echo "detection self-test: FAIL — checker found no drift in a stub CLAUDE.md" >&2
-  exit 1
-fi
-echo "detection self-test: PASS (planted drift detected, exit 2)"
+  cat "$stub_out" >&2; exit 1
+}
+for want in "DRIFT [D1]" "DRIFT [D5]"; do
+  grep -qF "$want" "$stub_out" || {
+    echo "detection self-test: FAIL — planted drift did not produce '$want'" >&2
+    cat "$stub_out" >&2; exit 1
+  }
+done
+grep -qF "definitely/not/a/real/route" "$stub_out" || {
+  echo "detection self-test: FAIL — D5 phantom-route direction not exercised" >&2
+  cat "$stub_out" >&2; exit 1
+}
+echo "detection self-test: PASS (D1 + D5 both directions detected by name, exit 2)"
 
 # 3. D7 key-adjacency: an unrelated 8000 must not green max_context_tokens.
 #    Plant a doctrine that cites every shipped value next to its key, then

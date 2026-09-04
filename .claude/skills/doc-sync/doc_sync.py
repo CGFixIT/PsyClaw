@@ -17,9 +17,12 @@ Checks:
     D4  Banned-pattern count  the real banned_patterns length matches the "<n> patterns"
                               claims across CLAUDE.md, config.yaml, guardrails, fsconnect
     D5  Route table           gate.py @app routes are all named in CLAUDE.md
-    D6  Hook claims           doc claims about a "stop hook" are backed by .claude/settings.json
+    D6  Hook claims           doc claims about a "stop hook" are backed by .claude/settings.json,
+                              across CLAUDE.md, AGENTS.md and .claude/rules/PROJECT_RULES.md
     D7  M5 doctrine           docs/m5-48gb-coding-expectations.md cites the shipped
                                local model tag, Ollama context budget, and timeout values
+    D8  Graph node count      the real graph.py add_node() count matches every "<n>-node"
+                              claim across the docs and agent-facing prompt files
 
 Exit codes (repo convention):
     0  no drift detected
@@ -291,10 +294,19 @@ def main(argv: list[str] | None = None) -> int:
             # the point that they live on a DIFFERENT app and port. Those are
             # real routes, so validate them against harness/server.py rather
             # than either ignoring them (no coverage) or flagging them (noise).
-            harness_path = root / "harness" / "server.py"
-            harness_routes = set(
-                re.findall(_decl, harness_path.read_text(encoding="utf-8"))
-            ) if harness_path.exists() else set()
+            # server.py owns 23 of the 29 guarded routes; the other six
+            # (/api/agent/*) are in agent_routes.py and the /api/auth/*
+            # surface is in auth_routes.py. Reading only server.py meant a
+            # doc citing a REAL route from either of those was reported as a
+            # phantom -- a false positive in the one direction of D5 that
+            # nothing else covers.
+            harness_routes: set[str] = set()
+            for _hname in ("server.py", "agent_routes.py", "auth_routes.py"):
+                _hp = root / "harness" / _hname
+                if _hp.exists():
+                    harness_routes |= set(
+                        re.findall(_decl, _hp.read_text(encoding="utf-8"))
+                    )
             known = set(api_routes) | harness_routes | {"/", "/static/*"}
 
             def _known(token: str) -> bool:
@@ -322,20 +334,74 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── D6 Stop-hook claims ─────────────────────────────────────────────────
     print("D6 Hook claims -> settings.json")
-    claims_stop_hook = "stop hook" in claude.lower()
     has_stop_hook = '"Stop"' in settings
-    # An accurate statement acknowledges the enforcement is applied by the
-    # session runtime rather than wired in repo settings.json. Only flag the
-    # NAIVE claim (implies a repo-wired hook) that no Stop hook backs.
-    acknowledges_runtime = bool(re.search(r"session runtime|not wired|runtime[- ]enforced", claude, re.I))
-    if claims_stop_hook and not has_stop_hook and not acknowledges_runtime:
+    # Two blind spots, both found the hard way: this check read CLAUDE.md
+    # ONLY, so PROJECT_RULES.md sat on a flat "the stop hook blocks
+    # --force-with-lease" while D6 reported clean -- exactly the claim it
+    # exists to catch. And the substring was "stop hook", which never matched
+    # the hyphenated "stop-hook" spelling CLAUDE.md itself uses. Every rule
+    # file that can make the claim is scanned now, and attribution is judged
+    # per file: one doc getting it right does not excuse another getting it
+    # wrong.
+    _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced", re.I)
+    _stop_hook_claim = re.compile(r"stop[- ]hook", re.I)
+    hook_docs = {"CLAUDE.md": claude}
+    for opt in ("AGENTS.md", ".claude/rules/PROJECT_RULES.md"):
+        fp = root / opt
+        if fp.exists():
+            hook_docs[opt] = fp.read_text(encoding="utf-8")
+    naive_docs = [
+        name for name, text in hook_docs.items()
+        if _stop_hook_claim.search(text) and not _runtime_attribution.search(text)
+    ]
+    claiming_docs = [n for n, t in hook_docs.items() if _stop_hook_claim.search(t)]
+    if naive_docs and not has_stop_hook:
         note("D6", ".claude/settings.json (no Stop hook wired)",
-             "CLAUDE.md references a 'stop hook' as if repo-wired, but settings.json wires no "
-             "Stop hook — wire it, or state that the enforcement is applied by the session runtime")
-    elif claims_stop_hook and has_stop_hook:
-        ok("D6", "stop-hook claim backed by a wired Stop hook")
+             f"{', '.join(naive_docs)} reference a 'stop hook' as if repo-wired, but "
+             "settings.json wires no Stop hook — wire it, or state that the enforcement is "
+             "applied by the session runtime")
+    elif claiming_docs and has_stop_hook:
+        ok("D6", f"stop-hook claim backed by a wired Stop hook ({len(claiming_docs)} doc(s) cite it)")
     else:
-        ok("D6", "stop-hook claim absent or accurately attributed to the runtime")
+        ok("D6", f"stop-hook claim absent or accurately attributed to the runtime ({len(hook_docs)} rule file(s) scanned)")
+
+    # ── D8 Graph node count ─────────────────────────────────────────────────
+    print("D8 Graph node count -> graph.py add_node()")
+    graph_src = (root / "graph.py").read_text(encoding="utf-8")
+    real_nodes = len(re.findall(r"\.add_node\(", graph_src))
+    if real_nodes == 0:
+        note("D8", "graph.py .add_node() calls", "no add_node() calls found — parser or graph.py changed shape")
+    else:
+        # Same shape as D4, and added for the same reason: four separate docs
+        # (a command doc, its .codex mirror, a work note and a NeMo phase doc)
+        # all sat on "10-node" after the two pre_action_hook_* nodes landed,
+        # while nothing checked the claim. A number repeated across agent-facing
+        # files is exactly what a mechanical check is for.
+        node_files = {"CLAUDE.md": claude}
+        for opt in ("README.md", "AGENTS.md", "INVARIANTS.md", "docs/THREAT_MODEL.md"):
+            fp = root / opt
+            if fp.exists():
+                node_files[opt] = fp.read_text(encoding="utf-8")
+        # Scope is deliberately the live authorities + agent-facing prompt files,
+        # the same set D4 settled on -- NOT docs/** wholesale. Dated audits,
+        # archived memories and superseded NeMo phase plans correctly describe
+        # the graph as it was when they were written; flagging them would make
+        # D8 fire 17 times on a healthy tree and be ignored within a week.
+        for sub in (".claude/skills", ".claude/commands", ".claude/rules", ".codex"):
+            base = root / sub
+            if base.is_dir():
+                for fp in sorted(base.rglob("*.md")):
+                    node_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
+        node_drift = []
+        for name, text in node_files.items():
+            for m in re.finditer(r"(\d+)[\s-]+node\b", text):
+                if int(m.group(1)) != real_nodes:
+                    node_drift.append(f"{name} claims {m.group(1)}-node")
+        if node_drift:
+            note("D8", f"graph.py has {real_nodes} add_node() calls",
+                 f"stale graph node-count claims: {sorted(set(node_drift))}")
+        else:
+            ok("D8", f"node count {real_nodes} consistent across {len(node_files)} scanned file(s)")
 
     result = {"drift_count": len(_drift), "drift": _drift}
     if args.json:
