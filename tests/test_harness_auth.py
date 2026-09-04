@@ -756,6 +756,34 @@ def test_setup_status_503_when_auth_off(client):
     assert r.status_code == 503
 
 
+def test_setup_status_cross_site_is_rejected(tmp_path, monkeypatch, cfg):
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    r = loop.get("/api/auth/setup-status", headers={"Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+
+def test_setup_status_foreign_origin_is_rejected(tmp_path, monkeypatch, cfg):
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    r = loop.get("/api/auth/setup-status", headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
 def test_harness_bootstrap_password_from_loopback(tmp_path, monkeypatch, cfg):
     monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
     monkeypatch.setattr(

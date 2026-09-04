@@ -716,21 +716,18 @@ security:
   # adversary already on the loopback interface.
   max_request_body_bytes: 1048576
   allowed_origins:
-    - "http://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
+    # Every entry MUST include an explicit port. A scheme+host with no port is
+    # implicit :80 (http) or :443 (https) -- a different browser origin from
+    # the console on :8787. Portless rows made a page on loopback :80 a
+    # CORS-simple GET to unauthenticated /health (corpus_path) and
+    # /index/status (#1298 N9). Do not re-add portless rows.
     - "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
-    - "http://localhost"  # DevSkim: ignore DS162092,DS137138
     - "http://localhost:8787"  # DevSkim: ignore DS162092,DS137138
-    - "http://10.0.0.112"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
-    - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - with port
-    - "http://10.0.0.111"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
-    - "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - with port
-    - "https://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
+    - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
+    - "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
     - "https://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
-    - "https://localhost"  # DevSkim: ignore DS162092,DS137138
     - "https://localhost:8787"  # DevSkim: ignore DS162092,DS137138
-    - "https://10.0.0.112"  # DevSkim: ignore DS137138
     - "https://10.0.0.112:8787"  # DevSkim: ignore DS137138
-    - "https://10.0.0.111"  # DevSkim: ignore DS137138
     - "https://10.0.0.111:8787"  # DevSkim: ignore DS137138
     # NOTE: "null" is deliberately absent from this list — do not re-add it.
     # curl/MCP clients send no Origin header at all, so they are never subject
