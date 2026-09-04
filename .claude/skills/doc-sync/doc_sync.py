@@ -110,6 +110,23 @@ def _add_paragraph_units(text: str, start: int, end: int, bounds: list[tuple[int
         bounds.append((mo, item_end))
 
 
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+.*$", re.MULTILINE)
+
+
+def _nearest_heading(text: str, pos: int) -> str:
+    """The Markdown heading line (if any) nearest before `pos`, empty if
+    none. Section headings ("## CyClaw graph") establish the subject for
+    the claim units under them, which a claim-unit-only context check can't
+    see once the heading is its own separate unit (Codex P2 on PR #1308).
+    """
+    heading = ""
+    for m in _HEADING.finditer(text):
+        if m.start() >= pos:
+            break
+        heading = m.group(0)
+    return heading
+
+
 _drift: list[dict] = []
 
 
@@ -434,7 +451,10 @@ def main(argv: list[str] | None = None) -> int:
     # file that can make the claim is scanned now, and attribution is judged
     # per file: one doc getting it right does not excuse another getting it
     # wrong.
-    _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced", re.I)
+    # "host" added for the live wording "unless the host stop-hook demands
+    # otherwise" (fable-5.1-cc/SKILL.md) -- attributes enforcement outside
+    # the repo, same as "session runtime", just a different word for it.
+    _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced|\bhost\b", re.I)
     # Bare co-occurrence with "stop hook" was too broad: CLAUDE.md's own Kimi
     # passage ("Kimi has neither the GitHub MCP tools nor the session
     # stop-hook...") mentions the phrase while denying it applies, which is not
@@ -640,7 +660,11 @@ def main(argv: list[str] | None = None) -> int:
         # catches ("LangGraph 10-node security topology (`graph.py`)")
         # happen to name the graph right next to the count anyway (Codex P2
         # on PR #1308, the approximate-count exclusion's sequel).
-        _node_context = re.compile(r"graph|langgraph|topology|cyclaw", re.I)
+        # Bare "graph"/"topology" is too generic on its own -- "The
+        # dependency graph has 99 nodes" is unrelated technical guidance that
+        # happens to use the word "graph". Require a token that actually
+        # names CyClaw's own graph.
+        _node_context = re.compile(r"langgraph|cyclaw|graph\.py", re.I)
         node_drift = []
         for name, text in node_files.items():
             unit_bounds = _claim_unit_bounds(text)
@@ -655,8 +679,13 @@ def main(argv: list[str] | None = None) -> int:
                 if int(m.group(2)) == real_nodes:
                     continue
                 for start, end in unit_bounds:
-                    if start <= m.start() < end and _node_context.search(text[start:end]):
-                        node_drift.append(f"{name} claims {m.group(2)}-node")
+                    if start <= m.start() < end:
+                        unit_context = _node_context.search(text[start:end])
+                        heading_context = not unit_context and _node_context.search(
+                            _nearest_heading(text, start)
+                        )
+                        if unit_context or heading_context:
+                            node_drift.append(f"{name} claims {m.group(2)}-node")
                         break
         if node_drift:
             note("D8", f"graph.py has {real_nodes} add_node() calls",

@@ -86,7 +86,7 @@ done
 # without ever planting a stale claim against it meant this self-test never
 # exercised D8 at all. Confirmed by Codex reviewing PR #1308: deleting the entire
 # D8 block from doc_sync.py still left this self-test reporting PASS, exit 0.
-printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the graph is a %s-node topology.\n\nThe sanitizer enforces %s banned_patterns.\n\nThe stop hook blocks force-push, if applied by the session runtime.\n' "$stale_node_count" "$stale_pattern_count" > "$tmp/CLAUDE.md"
+printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n\nStale claim: the CyClaw graph.py topology is a %s-node graph.\n\nThe sanitizer enforces %s banned_patterns.\n\nThe stop hook blocks force-push, if applied by the session runtime.\n' "$stale_node_count" "$stale_pattern_count" > "$tmp/CLAUDE.md"
 mkdir -p "$tmp/.claude/rules"
 printf 'The stop hook blocks --force-with-lease.\n' > "$tmp/.claude/rules/PROJECT_RULES.md"
 # setup-guide.md claiming a route that does not exist => the OTHER direction of
