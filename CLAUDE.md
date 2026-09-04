@@ -99,7 +99,7 @@ decision.
 | POST | `/ops/agentic` | **API key** | rate-limited; subprocess shim |
 | POST | `/ops/fsconnect` | **API key** | rate-limited; subprocess shim |
 | POST | `/ops/sqlconnect` | **API key** | rate-limited; subprocess shim |
-| GET | `/auth/setup-status` | none | rate-limited; `{enabled, needs_password, username}` when the bootstrap admin still has no password; 503 when `auth.enabled` is false |
+| GET | `/auth/setup-status` | same-origin (curl/MCP with no Origin still allowed) | rate-limited; `{enabled, needs_password, username}` when the bootstrap admin still has no password; 503 when `auth.enabled` is false |
 | POST | `/auth/bootstrap-password` | loopback peer, no forwarding headers | first admin password; same-origin; 403 off-box or when proxied; 409 once set; 503 when auth off |
 | POST | `/auth/login` | none | rate-limited; session cookie + CSRF token on success; 503 when `auth.enabled` is false |
 | POST | `/auth/logout` | **session cookie + CSRF** | rate-limited; 503 when `auth.enabled` is false |
@@ -772,7 +772,7 @@ nemo-guardrails/pr-review/conda/trivy workflows. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (218 `test_*.py` files, auto-collected by pytest).
+discoverable in `tests/` (219 `test_*.py` files, auto-collected by pytest).
 
 ---
 

@@ -291,7 +291,7 @@ README's "API Key Setup" section, before enabling it.
 | POST | `/api/agent/runs/{id}/publish` | Draft PR |
 | POST | `/api/agent/runs/{id}/discard` | Reclaim clone |
 | GET | `/api/harness/runs` | Local run list |
-| GET | `/api/auth/setup-status` | First-run bootstrap check: whether the admin account still needs a password. Rate-limited, no credential |
+| GET | `/api/auth/setup-status` | First-run bootstrap check: whether the admin account still needs a password. Rate-limited; same-origin (curl with no Origin still allowed); no credential |
 | POST | `/api/auth/bootstrap-password` | Sets the first admin password on a fresh install; open only until that password exists |
 | POST | `/api/auth/login` | Session login (sets `cyclaw_harness_session` cookie); `503` when harness auth is off |
 | POST | `/api/auth/logout` | Session logout |

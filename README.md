@@ -1,4 +1,4 @@
-# CyClaw: Local AI you can Trust.
+# Local (portable) AI you can Trust.
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.139-blue.svg)](https://fastapi.tiangolo.com/)
@@ -1355,3 +1355,5 @@ are in [`macos/README.md`](macos/README.md) and
 ---
 
 *designed and built by Chris Grady, with AI tooling used under human review / CI / invariant-guard*
+
+*source-available - all rights reserved*
