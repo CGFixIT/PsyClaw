@@ -134,9 +134,15 @@ app; see `utils/auth.py`'s module docstring for why). `config.yaml`'s
 does **not** touch the separate session/RBAC `/auth/*` system below, which
 stays governed by `auth.enabled` regardless. Two controls bound it:
 
-**Per-request (the primary one):** the bypass is granted only when the request's
-**socket peer is loopback** — a remote caller always needs the real key, on both
-apps. It holds regardless of how the process was launched, including
+**Per-request (the primary one):** `gate.py`'s `_api_key_bypass_allowed` requires
+**four** conditions, every one necessary — the flag is set; the request's
+**socket peer is loopback**; **no reverse-proxy forwarding header** is present
+(a proxy on this host makes every remote caller present a loopback peer); and
+the request is **not cross-site** (a page the operator visits is a loopback peer
+too, and a CORS-simple POST executes before CORS withholds the response). Do not
+read the loopback check as the whole control — the function's own docstring notes
+each condition closes a hole the previous ones left. A remote caller always needs
+the real key, on both apps, regardless of how the process was launched, including
 `uvicorn gate:app --host 0.0.0.0` (the container's own `CMD`) and
 `uvicorn harness.server:app`, neither of which runs a bind guard. Keyed on the
 peer, never the `Host` header (`TrustedHostMiddleware` is a DNS-rebinding
