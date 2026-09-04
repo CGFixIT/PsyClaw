@@ -32,6 +32,7 @@ Exit codes (repo convention):
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -369,20 +370,21 @@ def main(argv: list[str] | None = None) -> int:
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
                 hook_docs[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
-    # Per-paragraph, not per-document: a document-wide "does the qualifier appear
-    # ANYWHERE" check means one correctly-attributed mention excuses a separate,
-    # unqualified claim elsewhere in the same file -- exactly the failure mode that
-    # matters most for CLAUDE.md, which is long-lived and already carries one
-    # correct mention (Codex P2 on PR #1308). Split on blank lines and judge each
-    # paragraph on its own: a paragraph that mentions a stop hook without the
-    # qualifier IN THAT SAME PARAGRAPH is naive, regardless of what a different
-    # paragraph says.
-    def _naive_paragraphs(text: str) -> list[str]:
+    # Per-sentence, not per-paragraph: paragraph-level still let one sentence's
+    # qualifier excuse a DIFFERENT sentence's unattributed claim in the same
+    # paragraph -- Codex reproduced it with "The pre-commit hook is not wired in
+    # repo. The stop hook blocks --force-with-lease." (two sentences, one
+    # paragraph). Split on sentence-ending punctuation followed by whitespace --
+    # this deliberately does NOT split inside `settings.json` or similar (the
+    # period there has no following whitespace) -- and judge each sentence on its
+    # own: attribution must sit in the SAME sentence as the claim it excuses.
+    _sentence_split = re.compile(r"(?<=[.!?])\s+")
+    def _naive_sentences(text: str) -> list[str]:
         return [
-            para for para in re.split(r"\n\s*\n", text)
-            if _stop_hook_claim.search(para) and not _runtime_attribution.search(para)
+            sent for sent in _sentence_split.split(text)
+            if _stop_hook_claim.search(sent) and not _runtime_attribution.search(sent)
         ]
-    naive_docs = [name for name, text in hook_docs.items() if _naive_paragraphs(text)]
+    naive_docs = [name for name, text in hook_docs.items() if _naive_sentences(text)]
     claiming_docs = [n for n, t in hook_docs.items() if _stop_hook_claim.search(t)]
     if naive_docs and not has_stop_hook:
         note("D6", ".claude/settings.json (no Stop hook wired)",
@@ -405,17 +407,38 @@ def main(argv: list[str] | None = None) -> int:
     # graph.py is the core policy file, and silently succeeding when it is missing
     # would hide exactly the failure this check exists to catch.
     graph_src = graph_path.read_text(encoding="utf-8") if graph_path.exists() else None
-    if graph_src is None:
+    graph_tree = None
+    if graph_src is not None:
+        # ast, not a regex: a textual `.add_node(` count includes comments and
+        # string literals, so documenting a retired registration in a comment
+        # (e.g. "# Retired: graph.add_node(...)") silently inflates the reported
+        # topology (Codex P2 on PR #1308). Counting actual Call nodes whose
+        # attribute is add_node only sees executable code. A SyntaxError is
+        # treated the same as a missing file below -- falling back to the regex
+        # here would silently reintroduce the exact bug this fix closes.
+        try:
+            graph_tree = ast.parse(graph_src, filename=str(graph_path))
+        except SyntaxError:
+            graph_tree = None
+    if graph_src is None or graph_tree is None:
         # graph.py is the core policy file, not an optional citation like D7's M5
         # doctrine inputs -- treating its absence as ok() understated the same
         # comment's own "absent-safe like D7" claim: D7 reports an unreadable input
-        # via note() (a drift item), not ok(). An incomplete checkout or an
-        # accidental rename/deletion of graph.py should read the same way, not as
-        # success (Codex P2 on PR #1308).
-        note("D8", "graph.py", "graph.py not found -- node-count cross-check could not run")
+        # via note() (a drift item), not ok(). An incomplete checkout, an
+        # accidental rename/deletion, or a syntax error in graph.py should all read
+        # the same way, not as success (Codex P2 on PR #1308).
+        reason = "graph.py not found" if graph_src is None else "graph.py does not parse as Python"
+        note("D8", "graph.py", f"{reason} -- node-count cross-check could not run")
         real_nodes = 0
+        graph_src = None  # normalizes both failure branches below
     else:
-        real_nodes = len(re.findall(r"\.add_node\(", graph_src))
+        real_nodes = sum(
+            1
+            for node in ast.walk(graph_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_node"
+        )
     if graph_src is not None and real_nodes == 0:
         note("D8", "graph.py .add_node() calls", "no add_node() calls found — parser or graph.py changed shape")
     elif graph_src is not None:
