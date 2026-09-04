@@ -39,7 +39,7 @@ The notes file contains these fixed sections:
 
 ## Usage
 
-When invoked, update the session notes file (`docs/SESSION_NOTES.md` or `.claude/session-notes/`, per `CLAUDE.md` §7). If the file does not exist, create it with all section headings and italic descriptions intact. Then apply updates to the relevant sections using parallel Edit tool calls.
+When invoked, update the session notes file (`docs/work/SESSION_NOTES.md`, per `CLAUDE.md` §7 and §10). If the file does not exist, create it with all section headings and italic descriptions intact. Then apply updates to the relevant sections using parallel Edit tool calls.
 
 ## Notes
 

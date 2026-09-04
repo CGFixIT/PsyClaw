@@ -27,6 +27,8 @@ grepping.
 | `memory/` | Optional memory subsystem plan and README. |
 | `spend/` | Online-LLM token ledger: what `logs/spend.jsonl` records, why dollars are derived at read time, and how `cyclaw-metrics` reports them. |
 | `DOCKER.md`, `SECCOMP_EBPF_HARDENING.md`, `POSTGRES_BACKEND.md` | Deployment: containers, hardening (see also `../deploy/README.md`), Postgres backends. |
+| `m5-48gb-coding-expectations.md` | Local-model doctrine for the shipped Ollama tag: context budget, timeouts, and the no-stall arithmetic. One of only two docs `doc-sync`'s D7 check cross-references against `config.yaml` + `macos/ollama-mlx.env`. |
+| `ARCHIVE_AND_ROADMAP.md` | Where moved documents went, and the forward-looking roadmap. |
 | `online-llm/`, `NeMo/`, `security-philosophy/` | Provider notes, guardrails background, telemetry-kill reference env, Numbat 0.2.0 secondary-evaluator note. |
 
 ## Working / historical trees
