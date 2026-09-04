@@ -162,7 +162,7 @@ jobs:
 
       - name: Run pip-audit (ignore only mitigated chromadb + nltk CVEs)
         run: |
-          pip-audit -r requirements.txt -r requirements-test.txt --ignore-vuln CVE-2026-45829 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
+          pip-audit -r requirements.txt -r requirements-test.txt --ignore-vuln CVE-2026-45829 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3740 --ignore-vuln PYSEC-2026-3447
         # CVE-2026-45829 (Critical pre-auth RCE) — risk accepted under v1.4.0 invariants.
         # Actual controls:
         #   - chromadb.PersistentClient (local embedded mode, path from config.yaml["indexing"]["chroma_path"])
@@ -202,6 +202,38 @@ jobs:
         # live in code this repo never executes. stemmer.py's own header comment
         # already documents this: "the NLTK URL-encoded path-traversal CVE (punkt
         # tokenizer) is not reachable." Re-evaluate when a patched release ships.
+        #
+        # PYSEC-2026-3740 / CVE-2026-81726 (nltk) -- risk accepted 2026-09-04.
+        # SECURITY.md predicted this one at the #1256 bump: "if CVE-2026-81726
+        # still flags 3.10.3 after merge (advisory text says 'through 3.10.3'),
+        # re-triage -- unused model-artifact APIs; do not pre-ignore." It does
+        # flag 3.10.3, and this is that re-triage, not a pre-ignore.
+        #   - Advisory: path traversal in model-artifact APIs that bypass pathsec
+        #     by using raw file operations on caller-controlled paths. Named
+        #     affected APIs: TransitionParser, AveragedPerceptron,
+        #     PerceptronTagger, and maxent parameter APIs. CVSS v4.0 4.0.
+        #   - Reachability: NONE of those four is imported anywhere in this repo
+        #     (grep across all *.py returns only comments saying so). CyClaw's
+        #     only nltk usage remains `from nltk.stem import PorterStemmer`
+        #     (retrieval/stemmer.py:15,26) -- a pure string transform that opens
+        #     no files and takes no path argument.
+        #   - No fix to take: 3.10.3 is the newest release on PyPI and pip-audit
+        #     reports an empty Fix Versions column. There is no version to bump to.
+        #   - Sources disagree on whether 3.10.3 is patched: GHSA-8mgp-746c-j5xp
+        #     says affected <= 3.10.3, patched None; the PYSEC record appears to
+        #     carry fixed: 3.10.3 while its own details string says "through
+        #     3.10.3". pip-audit's live behaviour (flags it, no fix listed) is the
+        #     operative fact. If the advisory data is corrected so 3.10.3 is no
+        #     longer reported, DELETE this ignore -- a dead entry reads as a live
+        #     risk-acceptance (.osv-scanner.toml's hygiene rule).
+        #   - PYSEC-2026-3740 only, not the CVE-2026-81726 alias: pip-audit
+        #     reported that exact ID, and an ignore must match what the scanner
+        #     actually reports. .trivyignore and .osv-scanner.toml get NO entry --
+        #     neither scanner flags it, so an entry there would be dead weight.
+        #   - Guardrail: any change importing TransitionParser, AveragedPerceptron,
+        #     PerceptronTagger, maxent, nltk.data.load() or nltk.download() is a
+        #     security regression and re-opens this acceptance.
+        # Full assessment: SECURITY.md "Accepted Dependency Risks".
         #
         # (This step audits requirements.txt + requirements-test.txt, which
         # together cover base runtime + test tools and carry ZERO extras. Every
