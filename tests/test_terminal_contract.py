@@ -128,18 +128,27 @@ def test_submit_query_refuses_to_start_while_one_is_in_flight():
     so a refused send does not eat the operator's text — because the confirm
     buttons stay clickable while a later query is running. static/harness.html
     carries the same guard in onSend() for the same reason.
+
+    Issue #1298 N1: a confirm click that hits this guard used to return before
+    pendingConfirmById.delete, so the stored query stuck. The disabled path
+    must still drop that map entry.
     """
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     body = js.split("async function submitQuery(", 1)
     assert len(body) == 2, "submitQuery is no longer declared as expected; update this test"
     after = body[1]
-    guard = "if (sendBtn.disabled) return;"
+    guard = "if (sendBtn.disabled)"
     assert guard in after, f"submitQuery does not re-entry-guard on {guard!r}"
     # It has to run before the input is cleared, or a refused send still wipes
     # what the operator typed.
     assert after.index(guard) < after.index("input.value = ''"), (
         "the in-flight guard must precede the input reset inside submitQuery"
     )
+    disabled_block = after.split(guard, 1)[1].split("const query =", 1)[0]
+    assert "pendingConfirmById.delete(confirmEntryId)" in disabled_block, (
+        "in-flight confirm must drop the stored query before returning"
+    )
+    assert "return;" in disabled_block
 
 
 def test_check_health_treats_a_non_ok_response_as_unreachable():
