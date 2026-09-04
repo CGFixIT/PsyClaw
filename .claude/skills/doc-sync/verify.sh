@@ -57,20 +57,37 @@ printf '# CLAUDE.md\n\nMinimal stub with no skills table and no route list.\n' >
 printf '# setup-guide\n\n## REST API\n\n`/definitely/not/a/real/route`\n' > "$tmp/setup-guide.md"
 
 stub_out="$tmp/_out.txt"
-"$PY" "$checker" --repo-root "$tmp" > "$stub_out" 2>&1 && {
-  echo "detection self-test: FAIL — checker found no drift in a stub CLAUDE.md" >&2
+"$PY" "$checker" --repo-root "$tmp" > "$stub_out" 2>&1; stub_rc=$?
+# Require exactly 2 (drift found), not merely nonzero. A checker that crashes
+# (e.g. an unhandled exception reading a missing input) exits 1 -- letting that
+# masquerade as "drift detected" is the exact hole a prior version of this
+# self-test had on D7 (fixed above) and D8 (doc_sync.py, fixed after Codex
+# found it crashed on any tree without graph.py).
+if [ "$stub_rc" -ne 2 ]; then
+  echo "detection self-test: FAIL — checker exited $stub_rc (expected 2); it either" >&2
+  echo "  found no drift or crashed instead of detecting it:" >&2
   cat "$stub_out" >&2; exit 1
-}
+fi
 for want in "DRIFT [D1]" "DRIFT [D5]"; do
   grep -qF "$want" "$stub_out" || {
     echo "detection self-test: FAIL — planted drift did not produce '$want'" >&2
     cat "$stub_out" >&2; exit 1
   }
 done
+# D5 fires for two independent reasons in this fixture: routes gate.py has that
+# the stub setup-guide.md never mentions (undocumented), and the one phantom
+# route the stub setup-guide.md invents (phantom). Only asserting the phantom
+# text left the undocumented branch free to break silently -- disabling
+# doc_sync.py's `if undocumented:` block would still satisfy every assertion
+# above and report PASS (Codex P2 on PR #1308).
 grep -qF "definitely/not/a/real/route" "$stub_out" || {
   echo "detection self-test: FAIL — D5 phantom-route direction not exercised" >&2
   cat "$stub_out" >&2; exit 1
 }
+if ! grep -qF "missing from setup-guide.md's REST section" "$stub_out" || ! grep -qF "/health" "$stub_out"; then
+  echo "detection self-test: FAIL — D5 undocumented-route direction not exercised" >&2
+  cat "$stub_out" >&2; exit 1
+fi
 echo "detection self-test: PASS (D1 + D5 both directions detected by name, exit 2)"
 
 # 3. D7 key-adjacency: an unrelated 8000 must not green max_context_tokens.

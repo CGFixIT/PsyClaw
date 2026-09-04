@@ -389,7 +389,13 @@ def main(argv: list[str] | None = None) -> int:
         # while nothing checked the claim. A number repeated across agent-facing
         # files is exactly what a mechanical check is for.
         node_files = {"CLAUDE.md": claude}
-        for opt in ("README.md", "AGENTS.md", "INVARIANTS.md", "docs/THREAT_MODEL.md"):
+        for opt in (
+            "README.md", "AGENTS.md", "INVARIANTS.md", "docs/THREAT_MODEL.md",
+            # The canonical GitHub Copilot prompt -- a fourth agent surface
+            # alongside Claude/.codex, easy to forget precisely because nothing
+            # else in this file scans it (Codex P2 on PR #1308).
+            ".github/copilot-instructions.md",
+        ):
             fp = root / opt
             if fp.exists():
                 node_files[opt] = fp.read_text(encoding="utf-8")
