@@ -60,6 +60,46 @@ _AGENT_SCAN_EXCLUDE = (
 def _agent_scan_excluded(rel_path: str) -> bool:
     return any(rel_path == p or rel_path.startswith(p + "/") for p in _AGENT_SCAN_EXCLUDE)
 
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
+
+
+def _claim_unit_bounds(text: str) -> list[tuple[int, int]]:
+    """Exact (start, end) spans of the "claim unit" each position in `text`
+    belongs to: a blank-line-delimited paragraph, further split into list
+    items when the paragraph is a list (two or more marker lines) with no
+    blank line separating them -- adjacent, unrelated bullets otherwise share
+    one paragraph span and wrongly inherit each other's context (Codex P2 on
+    PR #1308, D4's third false positive in as many rounds). re.split() loses
+    each separator's real length, so spans are walked from the separator
+    matches directly rather than reconstructed from split() output.
+    """
+    bounds: list[tuple[int, int]] = []
+    pos = 0
+    for sep in re.finditer(r"\n\s*\n", text):
+        _add_paragraph_units(text, pos, sep.start(), bounds)
+        pos = sep.end()
+    _add_paragraph_units(text, pos, len(text), bounds)
+    return bounds
+
+
+def _add_paragraph_units(text: str, start: int, end: int, bounds: list[tuple[int, int]]) -> None:
+    lines = text[start:end].split("\n")
+    marker_idxs = [i for i, line in enumerate(lines) if _LIST_ITEM.match(line)]
+    if len(marker_idxs) < 2:
+        bounds.append((start, end))
+        return
+    line_offsets = []
+    pos = start
+    for line in lines:
+        line_offsets.append(pos)
+        pos += len(line) + 1
+    marker_offsets = [line_offsets[i] for i in marker_idxs]
+    for i, mo in enumerate(marker_offsets):
+        item_end = marker_offsets[i + 1] if i + 1 < len(marker_offsets) else end
+        bounds.append((mo, item_end))
+
+
 _drift: list[dict] = []
 
 
@@ -234,6 +274,10 @@ def main(argv: list[str] | None = None) -> int:
         "guardrails/rails.py", "agentic/fsconnect/client.py",
         "README.md", "docs/THREAT_MODEL.md", "INVARIANTS.md",
         "AGENTS.md",
+        # D6 and D8 already scan the canonical Copilot prompt; D4 didn't, so a
+        # sanitizer-count claim delivered only to Copilot bypassed this check
+        # (Codex P2 on PR #1308).
+        ".github/copilot-instructions.md",
     ):
         fp = root / opt
         if fp.exists():
@@ -257,24 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     _pattern_context = re.compile(r"banned|sanitiz|injection", re.I)
     drift_files = []
     for name, text in cite_files.items():
-        # Paragraph-bounded, not a flat character window: a window wide
-        # enough to survive a hard-wrapped line ("Sanitizer protection
-        # includes\n99 patterns.") is also wide enough to cross a paragraph
-        # break into unrelated prose ("See sanitizer notes.\n\n17 patterns
-        # for filenames.") and wrongly borrow its context word (Codex P2 on
-        # PR #1308, found immediately after the same window was added to fix
-        # the wrapped-line case). A blank-line-delimited paragraph is the
-        # right unit: it survives a soft wrap but stops at a real topic break.
-        # Paragraph spans as exact (start, end) positions -- re.split() loses
-        # each separator's real length (one blank line vs several), so
-        # reconstructing offsets from split() output is unreliable. Walking
-        # the separator matches directly keeps them exact.
-        para_bounds = []
-        pos = 0
-        for sep in re.finditer(r"\n\s*\n", text):
-            para_bounds.append((pos, sep.start()))
-            pos = sep.end()
-        para_bounds.append((pos, len(text)))
+        unit_bounds = _claim_unit_bounds(text)
         for m in re.finditer(r"(\d+)[\s-]+(?:(banned_)?pattern)", text):
             claimed = int(m.group(1))
             if claimed == real_n or claimed <= 5:  # ignore small unrelated numbers
@@ -282,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             if m.group(2):  # explicit "banned_pattern(s)" spelling, unambiguous
                 drift_files.append(f"{name} claims {claimed}")
                 continue
-            for start, end in para_bounds:
+            for start, end in unit_bounds:
                 if start <= m.start() < end:
                     if _pattern_context.search(text[start:end]):
                         drift_files.append(f"{name} claims {claimed}")
@@ -588,8 +615,17 @@ def main(argv: list[str] | None = None) -> int:
                     rel = str(fp.relative_to(root))
                     if not _agent_scan_excluded(rel):
                         node_files[rel] = fp.read_text(encoding="utf-8")
+        # Same context-requirement pattern as D4: an exact "<n> nodes" claim
+        # is ambiguous on its own -- generic sizing advice unrelated to
+        # CyClaw ("split workflows larger than 99 nodes") matches just as
+        # well as a real topology claim, and both of this repo's genuine
+        # catches ("LangGraph 10-node security topology (`graph.py`)")
+        # happen to name the graph right next to the count anyway (Codex P2
+        # on PR #1308, the approximate-count exclusion's sequel).
+        _node_context = re.compile(r"graph|langgraph|topology|cyclaw", re.I)
         node_drift = []
         for name, text in node_files.items():
+            unit_bounds = _claim_unit_bounds(text)
             for m in re.finditer(r"(~\s?)?(\d+)[\s-]+nodes?\b", text):
                 # A leading "~" is generic sizing advice ("avoid monolithic
                 # graphs beyond ~10 nodes"), not a claim about CyClaw's own
@@ -598,8 +634,12 @@ def main(argv: list[str] | None = None) -> int:
                 # regex had no way to distinguish "~10 nodes" from "10-node".
                 if m.group(1):
                     continue
-                if int(m.group(2)) != real_nodes:
-                    node_drift.append(f"{name} claims {m.group(2)}-node")
+                if int(m.group(2)) == real_nodes:
+                    continue
+                for start, end in unit_bounds:
+                    if start <= m.start() < end and _node_context.search(text[start:end]):
+                        node_drift.append(f"{name} claims {m.group(2)}-node")
+                        break
         if node_drift:
             note("D8", f"graph.py has {real_nodes} add_node() calls",
                  f"stale graph node-count claims: {sorted(set(node_drift))}")
