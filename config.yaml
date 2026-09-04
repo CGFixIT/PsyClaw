@@ -723,12 +723,12 @@ security:
     # /index/status (#1298 N9). Do not re-add portless rows.
     - "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
     - "http://localhost:8787"  # DevSkim: ignore DS162092,DS137138
-    - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
-    - "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
-    - "https://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
-    - "https://localhost:8787"  # DevSkim: ignore DS162092,DS137138
-    - "https://10.0.0.112:8787"  # DevSkim: ignore DS137138
-    - "https://10.0.0.111:8787"  # DevSkim: ignore DS137138
+    # "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
+    # "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
+    # "https://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
+    # "https://localhost:8787"  # DevSkim: ignore DS162092,DS137138
+    # "https://10.0.0.112:8787"  # DevSkim: ignore DS137138
+    # "https://10.0.0.111:8787"  # DevSkim: ignore DS137138
     # NOTE: "null" is deliberately absent from this list — do not re-add it.
     # curl/MCP clients send no Origin header at all, so they are never subject
     # to CORS filtering and lose nothing. "null" in allow_origins is invalid
@@ -745,8 +745,8 @@ security:
   allowed_hosts:
     - "127.0.0.1"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
     - "localhost"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
-    - "10.0.0.112"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
-    - "10.0.0.111"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
+    # "10.0.0.112"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
+    # "10.0.0.111"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
 
 # ===========================
 # sync: Dropbox corpus sync (out-of-band, rclone-based)
