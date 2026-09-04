@@ -48,7 +48,21 @@ done
 # hardcoded "10" -- if graph.py legitimately reaches 10 add_node() calls one
 # day, a hardcoded 10 stops being stale and the DRIFT [D8] assertion below
 # would fail even on a correctly working checker (Codex P2 on PR #1308).
-real_node_count=$(grep -c '\.add_node(' "$repo_root/graph.py")
+# AST-based, matching D8's own counting logic exactly -- a textual grep for
+# ".add_node(" is fooled by a call written as "graph.add_node (...)" (extra
+# space) or by comments/strings, which D8's ast.walk() correctly ignores or
+# still counts differently (Codex P2 on PR #1308: a grep-derived count can
+# equal the real AST count even when one is off, defeating this fixture).
+real_node_count=$(python3 -c "
+import ast
+tree = ast.parse(open('$repo_root/graph.py', encoding='utf-8').read())
+print(sum(
+    1 for node in ast.walk(tree)
+    if isinstance(node, ast.Call)
+    and isinstance(node.func, ast.Attribute)
+    and node.func.attr == 'add_node'
+))
+")
 stale_node_count=$((real_node_count + 1))
 mkdir -p "$tmp/.claude" "$tmp/harness"
 cp "$repo_root"/.claude/settings.json "$tmp/.claude/"

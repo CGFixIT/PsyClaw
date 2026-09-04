@@ -219,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     # Agent-facing prompt/rule files. Globbed rather than listed because skills
     # and commands are added routinely, and a new one citing the count must not
     # need an edit here to be covered.
-    for sub in (".claude/skills", ".claude/commands", ".claude/rules"):
+    for sub in (".claude/skills", ".claude/commands", ".claude/rules", ".codex"):
         base = root / sub
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
@@ -503,7 +503,7 @@ def main(argv: list[str] | None = None) -> int:
                     node_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
         node_drift = []
         for name, text in node_files.items():
-            for m in re.finditer(r"(\d+)[\s-]+node\b", text):
+            for m in re.finditer(r"(\d+)[\s-]+nodes?\b", text):
                 if int(m.group(1)) != real_nodes:
                     node_drift.append(f"{name} claims {m.group(1)}-node")
         if node_drift:
