@@ -38,6 +38,28 @@ import re
 import sys
 from pathlib import Path
 
+# Repo-relative path prefixes excluded from every "scan agent-facing prompts
+# for a stale count/claim" pass (D4, D6, D8). Shared across all three so the
+# same exclusion doesn't drift into three slightly different lists.
+#   - doc-sync's own directories: verify.sh's test fixtures are literal
+#     strings of the exact claims these checks look for, and scanning them
+#     makes the checker flag its own test data as live drift.
+#   - NEW_SKILL.md: a deliberately version-pinned snapshot ("Baseline of this
+#     document: main @ <hash>... Supersedes the <date> baseline") describing
+#     the repo as of a past commit. Its counts are correct FOR THAT BASELINE,
+#     not the current tree, so as soon as the real count changes again this
+#     file would otherwise be flagged and an agent misdirected to "fix" a
+#     historical record (Codex P2 on PR #1308).
+_AGENT_SCAN_EXCLUDE = (
+    ".claude/skills/doc-sync",
+    ".codex/skills/doc-sync",
+    ".codex/skills/Cyclaw-Sandbox/NEW_SKILL.md",
+)
+
+
+def _agent_scan_excluded(rel_path: str) -> bool:
+    return any(rel_path == p or rel_path.startswith(p + "/") for p in _AGENT_SCAN_EXCLUDE)
+
 _drift: list[dict] = []
 
 
@@ -223,7 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         base = root / sub
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
-                cite_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
+                rel = str(fp.relative_to(root))
+                if not _agent_scan_excluded(rel):
+                    cite_files[rel] = fp.read_text(encoding="utf-8")
     # A bare "<n> patterns" claim is ambiguous outside CLAUDE.md/config.yaml --
     # widening the scan to .codex/ surfaced a real unrelated claim ("17 patterns
     # for matching filenames") that this same regex would flag as sanitizer
@@ -391,14 +415,13 @@ def main(argv: list[str] | None = None) -> int:
     # doc-sync's own verify.sh (both trees) embeds the exact claim/attribution
     # strings D6 looks for, as literal test-fixture printf data -- scanning
     # its own directory makes the checker self-flag on its own test data, not
-    # a real agent-facing claim.
-    _d6_self_test_dirs = {".claude/skills/doc-sync", ".codex/skills/doc-sync"}
+    # a real agent-facing claim. Shares _AGENT_SCAN_EXCLUDE with D4/D8.
     for sub in (".claude/skills", ".claude/commands", ".codex"):
         base = root / sub
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
                 rel = fp.relative_to(root).as_posix()
-                if not any(rel.startswith(d) for d in _d6_self_test_dirs):
+                if not _agent_scan_excluded(rel):
                     hook_docs[rel] = fp.read_text(encoding="utf-8")
             # Skill shell scripts carry the same enforcement claims as their
             # SKILL.md (bootstrap.sh:9 "pins the git identity the stop hook
@@ -406,7 +429,7 @@ def main(argv: list[str] | None = None) -> int:
             # on PR #1308).
             for fp in sorted(base.rglob("*.sh")):
                 rel = fp.relative_to(root).as_posix()
-                if not any(rel.startswith(d) for d in _d6_self_test_dirs):
+                if not _agent_scan_excluded(rel):
                     hook_docs[rel] = fp.read_text(encoding="utf-8")
     # Per-claim-unit, not per-sentence: plain "split on sentence punctuation"
     # still failed on markdown bullet lists, which often carry no terminal
@@ -549,7 +572,9 @@ def main(argv: list[str] | None = None) -> int:
             base = root / sub
             if base.is_dir():
                 for fp in sorted(base.rglob("*.md")):
-                    node_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
+                    rel = str(fp.relative_to(root))
+                    if not _agent_scan_excluded(rel):
+                        node_files[rel] = fp.read_text(encoding="utf-8")
         node_drift = []
         for name, text in node_files.items():
             for m in re.finditer(r"(~\s?)?(\d+)[\s-]+nodes?\b", text):

@@ -53,7 +53,7 @@ done
 # space) or by comments/strings, which D8's ast.walk() correctly ignores or
 # still counts differently (Codex P2 on PR #1308: a grep-derived count can
 # equal the real AST count even when one is off, defeating this fixture).
-real_node_count=$(python3 -c "
+real_node_count=$("$PY" -c "
 import ast
 tree = ast.parse(open('$repo_root/graph.py', encoding='utf-8').read())
 print(sum(
