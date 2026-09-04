@@ -241,7 +241,8 @@ GROK_API_KEY=dummy pytest tests/test_graph.py -q --tb=short
 
 > Gotcha (verified): a freshly-cloned web container has **no Python deps
 > installed** — `pytest` import fails outright. Install first via the
-> `/CyClaw-Sandbox` skill -- its Quick Mode, or `/run` (note the CyClaw
+> `/CyClaw-Sandbox` skill's Environment section for the install commands
+> (Quick Mode / `/run` assumes deps are already installed) (note the CyClaw
 > install quirks: `torch==2.13.0+cpu` before `requirements.txt`, and
 > `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`). For
 > CI-/docs-/workflow-only PRs that touch no Python, the YAML/lint changes are
