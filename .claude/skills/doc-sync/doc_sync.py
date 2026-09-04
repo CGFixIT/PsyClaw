@@ -224,15 +224,26 @@ def main(argv: list[str] | None = None) -> int:
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
                 cite_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
+    # A bare "<n> patterns" claim is ambiguous outside CLAUDE.md/config.yaml --
+    # widening the scan to .codex/ surfaced a real unrelated claim ("17 patterns
+    # for matching filenames") that this same regex would flag as sanitizer
+    # drift (Codex P2 on PR #1308). Require the word to be spelled
+    # "banned_pattern(s)" (unambiguous on its own) OR sit near a sanitizer/
+    # injection-filter context word on the same line.
+    _pattern_context = re.compile(r"banned|sanitiz|injection", re.I)
     drift_files = []
     for name, text in cite_files.items():
-        # Find "<n> patterns" / "<n>-pattern" / "<n> banned_patterns" claims and
-        # check they equal real_n. The banned_patterns spelling is matched
-        # explicitly: "32 banned_patterns" has no whitespace directly before
-        # "pattern", so the generic alternative below never saw it.
-        for m in re.finditer(r"(\d+)[\s-]+(?:banned_)?pattern", text):
+        for m in re.finditer(r"(\d+)[\s-]+(?:(banned_)?pattern)", text):
             claimed = int(m.group(1))
-            if claimed != real_n and claimed > 5:  # ignore small unrelated numbers
+            if claimed == real_n or claimed <= 5:  # ignore small unrelated numbers
+                continue
+            if m.group(2):  # explicit "banned_pattern(s)" spelling, unambiguous
+                drift_files.append(f"{name} claims {claimed}")
+                continue
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            line_end = text.find("\n", m.end())
+            line = text[line_start: line_end if line_end != -1 else len(text)]
+            if _pattern_context.search(line):
                 drift_files.append(f"{name} claims {claimed}")
     if not drift_files:
         ok("D4", f"banned_patterns count {real_n} consistent everywhere it's cited")
