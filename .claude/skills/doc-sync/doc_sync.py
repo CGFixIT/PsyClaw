@@ -361,7 +361,14 @@ def main(argv: list[str] | None = None) -> int:
         re.I,
     )
     hook_docs = {"CLAUDE.md": claude}
-    for opt in ("AGENTS.md", ".claude/rules/PROJECT_RULES.md"):
+    for opt in (
+        "AGENTS.md", ".claude/rules/PROJECT_RULES.md",
+        # The canonical GitHub Copilot prompt -- D8 already scans it (a fourth
+        # agent surface alongside Claude/.codex); D6 needs the same coverage or
+        # an unsupported hook claim delivered to Copilot bypasses the checker
+        # entirely (Codex P2 on PR #1308).
+        ".github/copilot-instructions.md",
+    ):
         fp = root / opt
         if fp.exists():
             hook_docs[opt] = fp.read_text(encoding="utf-8")
@@ -370,21 +377,47 @@ def main(argv: list[str] | None = None) -> int:
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
                 hook_docs[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
-    # Per-sentence, not per-paragraph: paragraph-level still let one sentence's
-    # qualifier excuse a DIFFERENT sentence's unattributed claim in the same
-    # paragraph -- Codex reproduced it with "The pre-commit hook is not wired in
-    # repo. The stop hook blocks --force-with-lease." (two sentences, one
-    # paragraph). Split on sentence-ending punctuation followed by whitespace --
-    # this deliberately does NOT split inside `settings.json` or similar (the
-    # period there has no following whitespace) -- and judge each sentence on its
-    # own: attribution must sit in the SAME sentence as the claim it excuses.
+    # Per-claim-unit, not per-sentence: plain "split on sentence punctuation"
+    # still failed on markdown bullet lists, which often carry no terminal
+    # punctuation at all. Codex reproduced it with two adjacent bullets --
+    # "- The stop hook blocks force pushes" / "- The pre-commit hook is not
+    # wired" -- which sentence-splitting left as ONE unit (no ".", "!" or "?"
+    # between them), so the second bullet's qualifier excused the first
+    # bullet's unrelated claim. A paragraph that looks like a list (two or
+    # more lines starting with a list marker) is split by list item instead:
+    # each new marker line starts a fresh unit, and any following
+    # continuation line (no marker) folds into the item above it, so a single
+    # wrapped bullet still reads as one claim. A paragraph that is plain
+    # prose (fewer than two marker lines) keeps the sentence split from the
+    # previous round, since CLAUDE.md's real hand-wrapped sentences rely on
+    # exactly that: the claim and its attribution sit on different raw lines
+    # of the same soft-wrapped sentence, and splitting by raw line there
+    # would separate them incorrectly.
     _sentence_split = re.compile(r"(?<=[.!?])\s+")
-    def _naive_sentences(text: str) -> list[str]:
+    _list_item = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+")
+    def _claim_units(text: str) -> list[str]:
+        units: list[str] = []
+        for para in re.split(r"\n\s*\n", text):
+            lines = para.split("\n")
+            if sum(1 for line in lines if _list_item.match(line)) >= 2:
+                current: list[str] = []
+                for line in lines:
+                    if _list_item.match(line) and current:
+                        units.append(" ".join(current))
+                        current = [line]
+                    else:
+                        current.append(line)
+                if current:
+                    units.append(" ".join(current))
+            else:
+                units.extend(_sentence_split.split(para))
+        return units
+    def _naive_claims(text: str) -> list[str]:
         return [
-            sent for sent in _sentence_split.split(text)
-            if _stop_hook_claim.search(sent) and not _runtime_attribution.search(sent)
+            unit for unit in _claim_units(text)
+            if _stop_hook_claim.search(unit) and not _runtime_attribution.search(unit)
         ]
-    naive_docs = [name for name, text in hook_docs.items() if _naive_sentences(text)]
+    naive_docs = [name for name, text in hook_docs.items() if _naive_claims(text)]
     claiming_docs = [n for n, t in hook_docs.items() if _stop_hook_claim.search(t)]
     if naive_docs and not has_stop_hook:
         note("D6", ".claude/settings.json (no Stop hook wired)",
