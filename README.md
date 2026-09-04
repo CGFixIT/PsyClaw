@@ -1350,8 +1350,8 @@ are in [`macos/README.md`](macos/README.md) and
 
 > **Docker / GHCR:** published runtime image `ghcr.io/cgfixit/cyclaw` (tag-triggered). Operator guide, pull/run commands, Falco opt-in notes, and explicit non-goals (no microVM): [`docs/DOCKER.md`](docs/DOCKER.md). Host publish remains `127.0.0.1` only.
 
-> **Scope:** CyClaw is a single-operator, loopback-bound local server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The underlying design philosophy (telemetry kill, offline-first posture) lives in [`docs/security-philosophy/`](docs/security-philosophy/).
+> **Scope:** CyClaw is a multi-operator, loopback-bound local/optionally lan or wan server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The underlying design philosophy (telemetry kill, offline-first posture) lives in [`docs/security-philosophy/`](docs/security-philosophy/).
 
 ---
 
-*Envisioned and initially created then vibe coded further (via AI) by [Chris Grady](https://cgfixit.com) · [cgfixit.com/linkedin](https://cgfixit.com/linkedin)*
+*designed and built by Chris Grady, with AI tooling used under human review / CI / invariant-guard*
