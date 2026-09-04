@@ -344,12 +344,31 @@ def main(argv: list[str] | None = None) -> int:
     # per file: one doc getting it right does not excuse another getting it
     # wrong.
     _runtime_attribution = re.compile(r"session[- ]runtime|not wired|runtime[- ]enforced", re.I)
-    _stop_hook_claim = re.compile(r"stop[- ]hook", re.I)
+    # Bare co-occurrence with "stop hook" was too broad: CLAUDE.md's own Kimi
+    # passage ("Kimi has neither the GitHub MCP tools nor the session
+    # stop-hook...") mentions the phrase while denying it applies, which is not
+    # the claim this check exists to catch and is not a "session runtime"-style
+    # qualifier either -- the paragraph-level fix from the previous round turned
+    # that true statement into a false positive against a canonical, accurate
+    # doc (Codex P2 on PR #1308). Narrowed to require an assertive control verb
+    # near the phrase, which is what actually distinguishes a claim of
+    # enforcement ("the stop hook blocks...", "...the stop hook requires...")
+    # from prose that merely mentions or denies one.
+    _stop_hook_claim = re.compile(
+        r"stop[- ]hook\W+(?:\w+\W+){0,6}?(?:blocks?|enforces?|requires?|prevents?|rejects?)"
+        r"|(?:blocks?|enforces?|requires?|prevents?|rejects?)(?:\W+\w+){0,6}?\W+stop[- ]hook",
+        re.I,
+    )
     hook_docs = {"CLAUDE.md": claude}
     for opt in ("AGENTS.md", ".claude/rules/PROJECT_RULES.md"):
         fp = root / opt
         if fp.exists():
             hook_docs[opt] = fp.read_text(encoding="utf-8")
+    for sub in (".claude/skills", ".claude/commands", ".codex"):
+        base = root / sub
+        if base.is_dir():
+            for fp in sorted(base.rglob("*.md")):
+                hook_docs[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
     # Per-paragraph, not per-document: a document-wide "does the qualifier appear
     # ANYWHERE" check means one correctly-attributed mention excuses a separate,
     # unqualified claim elsewhere in the same file -- exactly the failure mode that
