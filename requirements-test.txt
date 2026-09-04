@@ -12,3 +12,11 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 pygments==2.21.0
+
+# tzdata gives zoneinfo a PEP 615 fallback on hosts without a system IANA
+# database (Windows), which the OpenTweet scheduling tests rely on. It lives here
+# rather than in requirements.txt because no production module imports zoneinfo --
+# opentweet/runner.py uses datetime.astimezone(), which reads the host's local
+# offset and needs no IANA tzdb -- so the wheel and the Docker image should not
+# carry it. constraints.txt still pins it as a version ceiling.
+tzdata==2026.2

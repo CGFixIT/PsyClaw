@@ -46,11 +46,6 @@ onnxruntime==1.29.0
 rank-bm25==0.2.2
 numpy==1.26.4
 nltk==3.10.3
-# tzdata is required on Windows (and any host without a system IANA database) for
-# zoneinfo to resolve IANA names such as America/New_York. Kept unconditional so
-# OpenTweet scheduling tests behave identically across platforms.
-tzdata==2026.2
-
 # Optional Postgres / pgvector / mssql backends (NOT installed by default — the base
 # install stays SQLite + ChromaDB, offline-first). Enable via the pyproject extras instead:
 #   pip install 'cyclaw[postgres]' -c constraints.txt   # soul DB + rate limiter over Postgres (CYCLAW_DB_URL)

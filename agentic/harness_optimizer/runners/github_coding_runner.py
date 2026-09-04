@@ -14,7 +14,6 @@ from pathlib import Path, PureWindowsPath
 
 from agentic.config import AgenticConfig
 from agentic.context import fetch_issue_context, fetch_pr_context, fetch_repo_context
-from agentic.deepagent_github.builder import DeepAgentBuildResult, build_deepagent_github
 from agentic.harness_optimizer.core import Experiment, RunReport, Variant
 from agentic.harness_optimizer.governance import (
     GovernanceFinding,
@@ -22,10 +21,8 @@ from agentic.harness_optimizer.governance import (
     governance_gate_strings,
     inspect_candidate_text,
 )
-from agentic.harness_optimizer.mcp.tools import ProposerWorkspaceTools
 from agentic.harness_optimizer.proposer import ProposerWorkspace
 from agentic.harness_optimizer.scoring import CaseResult, build_run_report
-from agentic.registry import SkillRegistry
 from utils.errors import AgenticError
 from utils.logger import audit_log
 
@@ -261,21 +258,3 @@ class GitHubCodingRunner:
         """Implement the existing HarnessRunner protocol."""
 
         return self.evaluate(experiment, variant).report
-
-    def build_optional_deepagent(
-        self,
-        agentic_config: AgenticConfig,
-        *,
-        skill_registry: SkillRegistry | None = None,
-        repo_root: Path | None = None,
-    ) -> DeepAgentBuildResult:
-        """Route optional Deep Agents construction through the governed builder."""
-
-        return build_deepagent_github(
-            agentic_config,
-            workspace_tools=ProposerWorkspaceTools(self.workspace, config_path=self.config_path, cfg=self.cfg),
-            skill_registry=skill_registry,
-            repo_root=repo_root,
-            config_path=self.config_path,
-            cfg=self.cfg,
-        )
