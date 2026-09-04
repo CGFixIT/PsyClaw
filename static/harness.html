@@ -1782,8 +1782,16 @@ if (hAuthLogout) {
     try {
       const response = await fetchWithTimeout('/api/auth/logout', { method: 'POST', headers: headers }, 15000);
       if (!response.ok) {
+        // Do not clear the page CSRF (const meta token). On 401/403 the
+        // header is already rejected; whoami refreshes session UI so a
+        // live cookie is visible. Restore the rejected line after whoami
+        // would overwrite it with username · role.
+        const rejected = 'logout rejected (' + response.status + ')';
+        if (response.status === 401 || response.status === 403) {
+          await refreshHarnessAuth();
+        }
         const who = document.getElementById('hAuthWho');
-        if (who) who.textContent = 'logout rejected (' + response.status + ')';
+        if (who) who.textContent = rejected;
         return;
       }
     } catch (e) { /* best-effort; refresh below paints whatever session remains */ }
