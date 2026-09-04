@@ -231,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     # "banned_pattern(s)" (unambiguous on its own) OR sit near a sanitizer/
     # injection-filter context word on the same line.
     _pattern_context = re.compile(r"banned|sanitiz|injection", re.I)
+    _PATTERN_CONTEXT_WINDOW_CHARS = 60
     drift_files = []
     for name, text in cite_files.items():
         for m in re.finditer(r"(\d+)[\s-]+(?:(banned_)?pattern)", text):
@@ -240,10 +241,14 @@ def main(argv: list[str] | None = None) -> int:
             if m.group(2):  # explicit "banned_pattern(s)" spelling, unambiguous
                 drift_files.append(f"{name} claims {claimed}")
                 continue
-            line_start = text.rfind("\n", 0, m.start()) + 1
-            line_end = text.find("\n", m.end())
-            line = text[line_start: line_end if line_end != -1 else len(text)]
-            if _pattern_context.search(line):
+            # A bounded character window, not just the physical line: hard-
+            # wrapped Markdown routinely puts the context word and the count
+            # on adjacent lines ("Sanitizer protection includes\n99
+            # patterns."), which a same-line-only check missed entirely
+            # (Codex P2 on PR #1308).
+            lo = max(0, m.start() - _PATTERN_CONTEXT_WINDOW_CHARS)
+            hi = min(len(text), m.end() + _PATTERN_CONTEXT_WINDOW_CHARS)
+            if _pattern_context.search(text[lo:hi]):
                 drift_files.append(f"{name} claims {claimed}")
     if not drift_files:
         ok("D4", f"banned_patterns count {real_n} consistent everywhere it's cited")
@@ -383,11 +388,26 @@ def main(argv: list[str] | None = None) -> int:
         fp = root / opt
         if fp.exists():
             hook_docs[opt] = fp.read_text(encoding="utf-8")
+    # doc-sync's own verify.sh (both trees) embeds the exact claim/attribution
+    # strings D6 looks for, as literal test-fixture printf data -- scanning
+    # its own directory makes the checker self-flag on its own test data, not
+    # a real agent-facing claim.
+    _d6_self_test_dirs = {".claude/skills/doc-sync", ".codex/skills/doc-sync"}
     for sub in (".claude/skills", ".claude/commands", ".codex"):
         base = root / sub
         if base.is_dir():
             for fp in sorted(base.rglob("*.md")):
-                hook_docs[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
+                rel = fp.relative_to(root).as_posix()
+                if not any(rel.startswith(d) for d in _d6_self_test_dirs):
+                    hook_docs[rel] = fp.read_text(encoding="utf-8")
+            # Skill shell scripts carry the same enforcement claims as their
+            # SKILL.md (bootstrap.sh:9 "pins the git identity the stop hook
+            # requires"), and a *.md-only glob left them unscanned (Codex P2
+            # on PR #1308).
+            for fp in sorted(base.rglob("*.sh")):
+                rel = fp.relative_to(root).as_posix()
+                if not any(rel.startswith(d) for d in _d6_self_test_dirs):
+                    hook_docs[rel] = fp.read_text(encoding="utf-8")
     # Per-claim-unit, not per-sentence: plain "split on sentence punctuation"
     # still failed on markdown bullet lists, which often carry no terminal
     # punctuation at all. Codex reproduced it with two adjacent bullets --
@@ -423,6 +443,24 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 units.extend(_sentence_split.split(para))
         return units
+    # KNOWN LIMIT (Codex P2 on PR #1308, deliberately NOT "fixed" further):
+    # whole-unit attribution lets an unrelated qualifier on a DIFFERENT hook
+    # excuse a real claim about the stop hook -- "The pre-commit hook is not
+    # wired, but the stop hook blocks force pushes." carries both "not wired"
+    # and "stop hook...blocks" in one sentence, and "not wired" describes the
+    # pre-commit hook, not this one. A character/word-proximity anchor to the
+    # "stop hook" phrase does NOT fix this: measured on this exact sentence
+    # pair, the malicious qualifier sits 10 chars from "stop hook" while the
+    # legitimate one in CLAUDE.md's real "if applied by the session runtime"
+    # phrasing sits 38 chars away -- no fixed window excludes the first
+    # without also excluding the second. Correctly scoping a qualifier to its
+    # subject needs a real dependency parse, not a regex window; this
+    # checker's remit is mechanical fact-checking (see SKILL.md), not NLP.
+    # Rather than ship a change that only moves which sentence shape slips
+    # through, this is accepted as a precision limit: a sentence naming TWO
+    # hooks with different enforcement claims in one unit can still bypass
+    # D6. Split such a sentence into two during Step 3's manual pass if one
+    # is ever found.
     def _naive_claims(text: str) -> list[str]:
         return [
             unit for unit in _claim_units(text)
