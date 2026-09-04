@@ -25,7 +25,7 @@ default_branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/de
 default_branch=${default_branch:-main}
 
 # ── 3. Fetch the default branch (read-only) ──────────────────────────────────
-git fetch --quiet origin "$default_branch:refs/remotes/origin/$default_branch" 2>/dev/null || {
+git fetch --quiet origin "+$default_branch:refs/remotes/origin/$default_branch" 2>/dev/null || {
   echo "[sync-check] Could not fetch origin/$default_branch (offline?). Skipping divergence report."
   exit 0
 }
