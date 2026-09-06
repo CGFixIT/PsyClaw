@@ -327,12 +327,14 @@ def route_by_score_node(state: GraphState, cfg: dict) -> dict:
         return {"needs_user_confirm": True}
 
     # RRF says two lists agreed on rank. It does not say the chunk is on-topic.
-    # When retrieve already stored a cosine (hybrid or semantic-only), require
-    # that too. Absent key → 0.0 so partial test configs keep RRF-only behavior.
     # Keyword-only hits have semantic_score None; they stay on the RRF gate.
-    sem_floor = retrieval.get("min_semantic_score", 0.0)
+    sem_floor = retrieval.get("min_semantic_score")
     docs = state.get("retrieved_docs") or []
-    if docs:
+    if (
+        isinstance(sem_floor, (int, float))
+        and not isinstance(sem_floor, bool)
+        and docs
+    ):
         sem = docs[0].get("semantic_score")
         if isinstance(sem, (int, float)) and not isinstance(sem, bool) and sem < sem_floor:
             return {"needs_user_confirm": True}

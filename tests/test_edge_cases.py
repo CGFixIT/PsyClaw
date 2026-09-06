@@ -141,6 +141,32 @@ class TestScoreRouterBoundary:
         )
         assert result["needs_user_confirm"] is False
 
+    def test_absent_semantic_floor_negative_cosine_stays_rrf_only(self):
+        from graph import route_by_score_node
+        cfg = {"retrieval": {"min_score": 0.028}}
+        result = route_by_score_node(
+            {
+                "query": "test",
+                "top_score": 0.0333,
+                "retrieved_docs": [{"score": 0.0333, "semantic_score": -0.12, "mode": "hybrid"}],
+            },
+            cfg=cfg,
+        )
+        assert result["needs_user_confirm"] is False
+
+    def test_null_semantic_floor_skips_compare(self):
+        from graph import route_by_score_node
+        cfg = {"retrieval": {"min_score": 0.028, "min_semantic_score": None}}
+        result = route_by_score_node(
+            {
+                "query": "test",
+                "top_score": 0.0333,
+                "retrieved_docs": [{"score": 0.0333, "semantic_score": -0.12, "mode": "hybrid"}],
+            },
+            cfg=cfg,
+        )
+        assert result["needs_user_confirm"] is False
+
 
 class TestUserGateRouter:
     """user_gate_router routing logic edge cases."""
