@@ -1,5 +1,11 @@
 # fsconnect Write-Enablement Playbook
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE. The gate model, trash/quota/rate-limit machinery, and CLI ops this playbook walks through are all confirmed live in `agentic/fsconnect/writer.py` (`FS_WRITE_HARD_DISABLE`, per-root rate limiting), `trash.py`, and `quota.py`. Its own "Known limitations" section is still accurate today: no hash-chain/tamper-evident audit exists anywhere in `utils/logger.py` (grep clean), and Windows writes remain hard-refused (`agentic/fsconnect/pathsafe.py`'s `_windows_writes_refused`) pending Phase 4 handle-based containment.
+>
+> **What's left:**
+> - Hash-chain/append-only audit (R-9), still open per the doc's own "Known limitations"
+> - Windows write authority (Phase 4), still hard-refused by design
+
 A staged runbook for enabling **production writes** in the CyClaw filesystem
 connector (`agentic/fsconnect/`). Each stage ends in a verify step; a failed verify
 sends you backward, never forward. This document describes the behavior actually

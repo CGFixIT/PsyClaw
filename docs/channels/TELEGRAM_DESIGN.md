@@ -1,4 +1,18 @@
 # CyClaw Telegram Channel — Design & Phase Plan
+
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL — this
+> matches the doc's own honest self-assessment, unchanged. Verified the
+> `telegram/` package matches the file table exactly (`client.py`, `config.py`,
+> `media.py`, `ratelimit.py`, `runner.py`, `state.py`, `cli.py`, `selftest.py`
+> all present); `config.yaml:1110` ships `telegram.enabled: false`. T0-T3 code
+> is real and unit-tested; T4 remains platform-partial (POSIX-only); live
+> operator validation (a real bot token, a real chat) is still unrecorded
+> in-repo, exactly as this doc states.
+>
+> **What's left:**
+> - Everything in this doc's own §8 "Live operator" checklist and §11 open
+>   decisions — this file already tracks its own remaining work precisely;
+>   no update needed to that content.
 <hr>
 
 > quick verification after token and bot created and config flipped
