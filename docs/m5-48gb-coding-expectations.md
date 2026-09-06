@@ -17,18 +17,24 @@ mistakes durable.
 
 ## Operator SKU
 
-Recorded facts only. 14-inch vs 16-inch and the 15/16 vs 18/20 Pro bin are
-not pinned in this repo — confirm on the machine with `sysctl -n machdep.cpu.brand_string`
-and About This Mac if a later change depends on GPU core count.
+Recorded facts only. The Pro bin was **verified 2026-09-06** from the
+operator's System Information (Hardware overview + Graphics/Displays panes):
+this is the **18-core CPU / 20-core GPU** bin, not the 15/16 one. Serial number,
+Hardware UUID, and Provisioning UDID were deliberately left out — per-device
+identifiers do not belong in a public repo; the Model Identifier and SKU below
+are shared by every unit of this configuration and are what a reader needs.
 
 | Field | This machine |
 |---|---|
 | Product | MacBook Pro (Apple silicon, 2026 M5 Pro / Max generation) |
+| Model Identifier / SKU | `Mac17,9` / `Z1ML00050LL/A` (verified 2026-09-06) |
 | SoC | **Apple M5 Pro** |
-| Unified memory | **48 GB** |
-| Memory bandwidth | **307 GB/s** (M5 Pro, both GPU bins) |
-| CPU / GPU bins possible | 15-core CPU + 16-core GPU, or 18-core CPU + 20-core GPU |
-| Neural Engine | 16-core |
+| Unified memory | **48 GB** (verified) |
+| Memory bandwidth | **307 GB/s** (M5 Pro, both GPU bins — spec-sheet figure; System Information does not report bandwidth) |
+| CPU | **18 cores** — System Information labels them "6 Super and 12 Performance" (verified) |
+| GPU | **20 cores**, Metal 4 (verified) |
+| Display | Built-in Liquid Retina XDR, 3024 × 1964 (verified) — that panel resolution is the 14-inch model's, so this is the **14-inch** MacBook Pro (likely; inferred from the panel, not read off a size field) |
+| Neural Engine | 16-core (spec-sheet; not shown in System Information) |
 | Not this machine | Base **M5** (10/10, ~153 GB/s, max **32 GB**) |
 | Not this machine | **M5 Max** (18/32 or 18/40, ~460 or ~614 GB/s, max **128 GB**) |
 | Local coder | `qwen3.8:27b-mlx`, 4-bit, `reasoning_effort: none`, `num_ctx` 16384 |
@@ -46,7 +52,7 @@ cannot be configured with 48 GB. M5 Max can be configured with 48 GB on the
 | Chip | Typical CPU / GPU | Memory bandwidth | Unified memory ceiling | 48 GB available? |
 |---|---|---|---|---|
 | M5 (base) | 10 / 10 | ~153 GB/s | 32 GB | No |
-| **M5 Pro (this box)** | 15/16 or 18/20 | **307 GB/s** | 64 GB | **Yes — this config** |
+| **M5 Pro (this box)** | **18 / 20** (verified 2026-09-06; the 15/16 bin also exists) | **307 GB/s** | 64 GB | **Yes — this config** |
 | M5 Max | 18 / 32 or 40 | ~460 or ~614 GB/s | 128 GB | Yes, on 40-core GPU SKUs |
 
 What that means for CyClaw:

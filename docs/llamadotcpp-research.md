@@ -8,7 +8,7 @@
 
 | Concern | Current fact |
 |---|---|
-| Operator hardware | **MacBook Pro, Apple M5 Pro, 48 GB unified memory** — not a base M5 (32 GB ceiling) and not an M5 Max. |
+| Operator hardware | **MacBook Pro, Apple M5 Pro, 48 GB unified memory** — the 18-core CPU / 20-core GPU bin (`Mac17,9`, verified from System Information 2026-09-06; details in the M5 doc linked below). Not a base M5 (32 GB ceiling) and not an M5 Max. |
 | Model family | **Qwen3.8 27B**. |
 | Shipped Mac tag | `qwen3.8:27b-mlx`: the Apple-Silicon MLX 4-bit tag, approximately 18 GB. `config.yaml` keeps `models.local_llm.model` and `guardrails.model` aligned on this tag. |
 | Portable non-MLX tag | `qwen3.8:27b` is the generic GGUF tag for Intel/Windows/Linux. It is not the Mac default; an operator who deliberately switches to it must update both C11-paired config fields and remeasure. |
