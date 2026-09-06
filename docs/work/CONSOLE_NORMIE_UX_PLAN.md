@@ -1,8 +1,22 @@
 # CyClaw console: "good for a dentist" — implementation plan
 
-Base: `origin/main` @ `730b979` (#1074 merged). Working tree clean.
+Original planning base: `origin/main` @ `730b979` (#1074 merged).
+Status rechecked against `origin/main` @ `f151a84` on 2026-09-06.
 Discipline: `/karpathy-guidelines` + `/ponytail` — surgical diffs, no speculative
 generality, every claim below verified against source (file:line) not recalled.
+
+---
+
+## Still to implement
+
+1. Rewrite the confirmation prompt: it still says
+   `Vault miss (best score: … < …)`, exposing operator jargon and raw scores.
+2. Add the planned health-details expander and an inline Ollama help link;
+   today this is tooltip-only text.
+3. Render index-build elapsed time. The API returns it and chunk progress now
+   works, but the panel does not show elapsed time.
+4. Optional polish: translate answer metadata from `model: local`, `mode`, and
+   `hits` into the plan's human wording ("answered from your documents," etc.).
 
 ---
 
