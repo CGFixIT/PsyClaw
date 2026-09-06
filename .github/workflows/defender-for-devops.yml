@@ -76,6 +76,7 @@ jobs:
             gate_auth.py \
             gate_memory.py \
             graph.py \
+            mcp_hybrid_server.py \
             retrieval \
             utils \
             llm \
