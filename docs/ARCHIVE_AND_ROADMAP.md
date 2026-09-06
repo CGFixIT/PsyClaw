@@ -35,6 +35,22 @@ shipped 4a vs open 4b (soul-leak). The 4b contract (new primitive, FP sweep
 before wire, Colang polarity) is `docs/NeMo/phase4b_soul_leak.md`. Phase3
 stays in `docs/NeMo/` for history.
 
+**Update 2026-09-06: five of the "coexisting" originals have now been
+deleted** (owner decision after the 2026-09-06 stale-docs review), so for
+these the condensed record in this file is the sole surviving copy and the
+"not deleted / intentionally coexisting" wording above no longer applies:
+`docs/work/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md` (shipped-`sync/` rationale
+also in `docs/SYNC_README.md`),
+`docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md` (§2c),
+`docs/work/subagent_researcher_notes.md` (§3; its source-URL list is now only
+in git history), `docs/zIdeas/API.md` (a one-off review of commit `c4189b6`,
+verified landed in `llm/client.py`), and `docs/work/CONSOLE_REVIEW_BUNDLE_PLAN.md`
+together with `docs/work/console-review-bundle/`'s issue doc (#1201, resolved)
+and its two `.patch` review records (F3 landed as #1200; F1 was superseded by
+#1194 and carried no applicable diff) — the still-unexecuted
+`cyclaw-dep-cve-scan-claude-code.md` runbook in that directory was kept. All
+are recoverable with `git log --diff-filter=D -- <path>`.
+
 **Follow-up from the prior "before deletion" list — completed 2026-08-02**
 (tracked here so it isn't lost):
 
@@ -131,7 +147,7 @@ What phases 6-9 actually built, on top of the phase-5 scaffold in `GITHUB_DEEP_A
 
 - `docs/work/SETUP.md` (moved from `docs/SETUP.md`) — moved; the file is a one-paragraph stub stating it "has moved to keep a single canonical setup guide instead of two drifting copies" and points to `/setup-guide.md` at the repo root (Windows + Linux, Ollama; the stub dates that target as current as of 2026-07-29).
 - `docs/work/SECURITY_THREAT_model.md` (moved from `docs/security-philosophy/SECURITY_THREAT_model.md`) — confirmed stub: its entire content is a single line, the GitHub URL `https://github.com/cgfixit/CyClaw/blob/main/docs/THREAT_MODEL.md`, i.e. it redirects to `docs/THREAT_MODEL.md`.
-- `docs/work/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md` (moved from `docs/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md`) — its status banner confirms the plan is superseded by the shipped `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`, driven from the terminal's Sync Console via `POST /ops/sync`, covered by `tests/test_sync_*.py`), kept only for design rationale; the banner's own words name the successor doc as `Dropbox_Sync_Guide.md`. Note this is ambiguous against the rest of the same file: §5's file layout, §12's documentation deliverables, and §16.3 (Role C) all instead name `docs/SYNC_README.md` as the shipped operator guide. The banner text and the body of its own document disagree on the successor filename — flagging rather than guessing which is current.
+- `docs/work/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md` (moved from `docs/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md`) — its status banner confirms the plan is superseded by the shipped `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`, driven from the terminal's Sync Console via `POST /ops/sync`, covered by `tests/test_sync_*.py`), kept only for design rationale; the banner's own words name the successor doc as `Dropbox_Sync_Guide.md`. (**File deleted 2026-09-06** — see the dated update at the top of this file; the shipped rationale lives in `docs/SYNC_README.md`.) Note this is ambiguous against the rest of the same file: §5's file layout, §12's documentation deliverables, and §16.3 (Role C) all instead name `docs/SYNC_README.md` as the shipped operator guide. The banner text and the body of its own document disagree on the successor filename — flagging rather than guessing which is current.
 
 ## 2b. Retired Subsystem Record — GitHub Deep Agent Harness Optimizer
 
