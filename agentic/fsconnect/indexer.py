@@ -166,7 +166,7 @@ class FsIndexer:
         """Load the prior run's skip-cache (rel -> {size, mtime, ...}); {} if absent."""
         try:
             data = json.loads((staging / _CACHE_NAME).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             return {}
         files = data.get("files") if isinstance(data, dict) else None
         return files if isinstance(files, dict) else {}

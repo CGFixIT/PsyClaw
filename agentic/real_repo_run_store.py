@@ -140,7 +140,7 @@ def load_run(runs_dir: Path, run_id: str) -> RealRepoRunRecord:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return RealRepoRunRecord(**data)
-    except (OSError, json.JSONDecodeError, TypeError) as exc:
+    except (OSError, json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
         # This file crosses a real process boundary -- written by the run
         # subprocess, read back by a later status/decide subprocess -- so a
         # truncated write, a hand-edited record, or a future field rename all
