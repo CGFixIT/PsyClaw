@@ -1,16 +1,12 @@
 # CyClaw console: "good for a dentist" — implementation plan
 
-> **Status update — 2026-09-06 (implementation recheck):** MOSTLY COMPLETE. All
-> four PRs in this plan's own status log (§4) are shipped and verified live on
-> `main`: the advanced-mode toggle exists (`static/terminal.html:959-960`
-> `#advancedTools`/`Advanced ▸`), `POST /index/build` + `GET /index/status`
-> exist in `gate.py` (lines 913, 969), and `QueryResponse.llm_model`
-> (`schemas/api.py:57`) carries the resolved model tag additively alongside
-> the untouched `model_used` role vocabulary. Error-copy and privacy-lede work
-> described in PR 1/3 is in `terminal.js`/`terminal.html` as claimed.
->
-> Four smaller UX gaps remain. They were reverified against current code and
-> are listed below; implementation details are tracked in GitHub issue #1331.
+> **Status update — 2026-09-06 (remaining #1331 items):** COMPLETE. The four
+> original PRs in §4 remain shipped. Item 1 of the leftover list (plain-language
+> confirm prompt) shipped in #1342. Items 2–4 ship with the console change that
+> updates this banner: an accessible health-details disclosure plus inline
+> `ollama serve` help, index-build `elapsed_sec` on the first-run panel, and
+> answer-route copy derived from the stable `model_used` role plus `llm_model`.
+> No API, routing, or write-gate change.
 
 Original planning base: `origin/main` @ `730b979` (#1074 merged).
 Status rechecked against `origin/main` @ `9bf7347` on 2026-09-06.
@@ -21,14 +17,20 @@ generality, every claim below verified against source (file:line) not recalled.
 
 ## Still to implement
 
-1. Rewrite the confirmation prompt: it still says
-   `Vault miss (best score: … < …)`, exposing operator jargon and raw scores.
-2. Add the planned health-details expander and an inline Ollama help link;
-   today this is tooltip-only text.
-3. Render index-build elapsed time. The API returns it and chunk progress now
-   works, but the panel does not show elapsed time.
-4. Optional polish: translate answer metadata from `model: local`, `mode`, and
-   `hits` into the plan's human wording ("answered from your documents," etc.).
+All four leftover items from issue #1331 are done:
+
+1. **Done (#1342).** Confirmation prompt is plain language:
+   `I couldn't find a confident match in your documents. Choose where to answer.`
+   No `Vault miss` / raw score comparison in the default `confirm_message`.
+2. **Done.** Health chip keeps terse amber/green/offline text; a native
+   `<details>` next to it shows the latest `/health` payload via `textContent`.
+   Ollama-down exposes an inline "How to start" control with `ollama serve`.
+3. **Done.** `indexBuild.elapsed` stores finite non-negative `elapsed_sec`,
+   resets on a new build, and renders compactly (`42s`, `2m 08s`) even without
+   chunk totals. Missing/non-numeric values stay absent.
+4. **Done.** Default answer meta translates `model_used` + `llm_model` into
+   the plan's route sentences. Raw fields remain in advanced mode. Blocked and
+   error paths do not claim a model answered.
 
 ---
 
@@ -346,3 +348,7 @@ schema or a route.
   `/query` plus the 4 that arrive as a 200 with an `error` field) with a
   parallel `extractErrorCode` so the code stays visible in small print beside
   the plain-language sentence, never discarded.
+- **#1331 leftover items** — item 1 shipped in #1342. Items 2–4 (health
+  disclosure + local Ollama help, index-build elapsed time, answer-route copy)
+  ship in the console follow-up that closed the issue. Gateway contracts,
+  graph topology, and write gates are unchanged.

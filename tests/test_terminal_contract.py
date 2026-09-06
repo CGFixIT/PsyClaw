@@ -608,3 +608,147 @@ def test_ops_calls_cover_server_side_budgets():
     assert "let opsSyncDeadlineMs = 7320000;" in js
     assert "opsSyncDeadlineMs = (data.ops_sync_timeout_sec + 60) * 1000;" in js
     assert "}, 60000);" not in js, "flat 60s ops ceiling regressed"
+
+
+def test_health_details_are_keyboard_reachable_and_json_uses_textcontent():
+    """Health guidance used to live only on statusText.title (hover). The
+    disclosure must be a native <details> next to the chip so keyboard and
+    screen-reader users can open the latest /health payload without hover,
+    and that payload must be assigned with textContent -- never innerHTML.
+    """
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+
+    assert 'id="healthDetails"' in html
+    details = html.split('id="healthDetails"', 1)[1]
+    assert "<summary>" in html.split('class="health-details"', 1)[1]
+    assert 'id="healthJson"' in details
+    assert "<pre" in html.split('id="healthJson"', 1)[0][-80:]
+
+    assert "function paintHealthDisclosure(" in js
+    body = js.split("function paintHealthDisclosure(", 1)[1].split("\n}", 1)[0]
+    assert "jsonEl.textContent = jsonText" in body
+    assert "jsonEl.innerHTML" not in body
+    assert ".innerHTML =" not in body
+    assert "JSON.stringify(lastHealth, null, 2)" in js
+    # Unreachable /health must not leave stale JSON labelled as current.
+    assert "Last successful health response" in js
+    assert "paintHealthStatus({ unreachable: true })" in js
+
+
+def test_ollama_down_exposes_inline_how_to_start():
+    """When Ollama is down the chip stays terse/amber; startup help is a
+    one-click control with local `ollama serve` copy, not an external docs
+    link and not hover-only title text.
+    """
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+
+    assert 'id="ollamaHelp"' in html
+    help_block = html.split('id="ollamaHelp"', 1)[1].split("</details>", 1)[0]
+    assert "How to start" in help_block
+    assert "ollama serve" in help_block
+    assert "http" not in help_block.lower()
+
+    describe = js.split("function describeHealth(", 1)
+    assert len(describe) == 2, "describeHealth moved; update this test"
+    desc_body = describe[1].split("function paintHealthDisclosure(", 1)[0]
+    assert "down.includes('ollama')" in desc_body
+    assert "Local AI engine isn't running" in desc_body
+    assert "tone: 'warn'" in desc_body
+    assert "tone: 'ok'" in desc_body
+    assert "ollamaHelp.hidden = !ollamaDown" in js
+    # The chip ranks "No library yet" above the Ollama-down sentence, but the
+    # How to start control must still appear whenever the service is down.
+    ranked = desc_body.split("if (d.index_ready === false)", 1)
+    assert len(ranked) == 2, "index_ready ranking moved; update this test"
+    no_lib = ranked[1].split("if (ollamaDown)", 1)[0]
+    assert "ollamaDown," in no_lib or "ollamaDown:" in no_lib
+    assert "ollamaDown: false" not in no_lib
+
+
+def test_index_build_renders_elapsed_when_present():
+    """GET /index/status already returns elapsed_sec; the panel used to ignore
+    it. Store only finite non-negative values, reset on a new build, format
+    compactly, and show elapsed even when chunk totals are missing. Do not
+    coerce missing values with `elapsed_sec || 0` (that prints a fake 0).
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "function formatElapsed(" in js
+    fmt = js.split("function formatElapsed(", 1)[1].split("\n}", 1)[0]
+    assert "if (!Number.isFinite(seconds) || seconds < 0) return ''" in fmt
+    assert "${whole}s" in fmt
+    assert "padStart(2, '0')}s" in fmt
+
+    assert "indexBuild.elapsed = null" in js
+    assert "Number.isFinite(s.elapsed_sec) && s.elapsed_sec >= 0" in js
+    assert "s.elapsed_sec || 0" not in js
+    assert "Elapsed ${elapsed}" in js
+
+    start = js.split("async function startIndexBuild(", 1)
+    assert len(start) == 2, "startIndexBuild moved; update this test"
+    start_body = start[1].split("function pollIndexStatus(", 1)[0]
+    assert "indexBuild.elapsed = null" in start_body
+
+    poll = js.split("function pollIndexStatus(", 1)
+    assert len(poll) == 2, "pollIndexStatus moved; update this test"
+    poll_body = poll[1].split("\n  }, INDEX_POLL_MS);", 1)[0]
+    assert poll_body.index("if (!resp.ok)") < poll_body.index("indexBuild.elapsed"), (
+        "elapsed must be stored only after the resp.ok guard"
+    )
+
+
+def test_answer_route_copy_uses_stable_model_used_roles():
+    """Default answer meta translates the stable model_used role plus the
+    additive llm_model tag. Blocked/unavailable/unknown roles must not claim
+    a model answered. Raw fields stay available in advanced mode.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "function describeAnswerRoute(" in js
+    body = js.split("function describeAnswerRoute(", 1)[1].split("\n}", 1)[0]
+    assert "case 'local':" in body
+    assert "answered from your documents · ${llmModel || 'the local model'}" in body
+    assert (
+        "not in your documents · answered locally by ${llmModel || 'the local model'} "
+        "from its own knowledge"
+    ) in body
+    assert "case 'offline-best-effort':" in body
+    assert "case 'grok':" in body
+    assert "case 'claude':" in body
+    assert "not in your documents · sent to ${llmModel || 'Grok'}" in body
+    assert "not in your documents · sent to ${llmModel || 'Claude'}" in body
+    assert "default:" in body
+    assert "return null;" in body
+    for blocked in (
+        "guardrail-blocked", "hook-denied", "external-unavailable",
+    ):
+        assert f"case '{blocked}'" not in body
+
+    submit = js.split("async function submitQuery(", 1)[1]
+    assert "describeAnswerRoute(data.model_used, data.llm_model)" in submit
+    assert "if (advancedMode)" in submit
+    # The default row uses the friendly sentence; it must not still be the
+    # raw role/mode/hits list for every visitor.
+    default_meta = submit.split("const route =", 1)[1]
+    assert "{ k: 'route', v: route }" in default_meta
+    assert "if (route)" in default_meta
+
+
+def test_answer_route_copy_is_suppressed_when_query_body_has_error():
+    """A 200 /query can keep model_used as local/grok/claude and still set
+    error (failed generation, destination-trust reject, output-guard block).
+    Success-oriented route copy must not run in that case; the existing
+    WARNING entry remains the user-facing path.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    submit = js.split("async function submitQuery(", 1)[1]
+    after_confirm = submit.split("if (data.needs_confirm)", 1)[1]
+    route_assign = after_confirm.split("const route =", 1)[1].split("const meta =", 1)[0]
+    assert "data.error" in route_assign
+    assert route_assign.index("data.error") < route_assign.index("describeAnswerRoute"), (
+        "route success copy must be gated on the absence of data.error"
+    )
+    assert after_confirm.index("const route =") < after_confirm.index("if (data.error)"), (
+        "the error WARNING path must still run after the route decision"
+    )
+    assert "addEntry('error', 'WARNING'" in after_confirm
