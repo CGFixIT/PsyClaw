@@ -1,1 +1,1080 @@
+# CyClaw runtime configuration; subsystem loaders validate values and supply defaults.
+# Prompt-filter patterns live under policy.prompt_filter and are compiled by
+# utils/sanitizer.py with IGNORECASE | DOTALL.
+
+app:
+  name: "cyclaw"
+  env: "local"
+  mode: "hybrid"  # "offline" | "hybrid"
+  # Does not configure FastAPI debug mode; utils/logger.py reads logging.level.
+  debug: true
+
+models:
+  local_llm:
+    # Operator-owned model hosts for container/LAN access; receive local context.
+    trusted_hosts: []  # Exact hostnames/IPs; loopback is always allowed.
+    provider: "ollama"
+    base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - Ollama loopback, offline-only
+    # Quote numeric-looking api_key values to preserve their text; llm/client.py
+    # omits Authorization when the selected backend has no key.
+    model: "qwen3.8:27b-mlx"            # keep in sync with guardrails.model
+    # llm/client.py sends this only for a resolved Ollama backend.
+    # utils/config_validation.py accepts none | low | medium | high | max;
+    # absent/empty omits the field, while an invalid value fails at boot.
+    # "none" requests thinking off; verify backend support via docs/! How-To-Guides/OLLAMA_SETUP.md.
+    reasoning_effort: "none"
+    # Output cap sent by LocalLLMClient. graph.py estimates input size using
+    # characters, not the model tokenizer; its minimum context allowance can
+    # push input beyond the estimate. Size the backend window for input plus output.
+    max_tokens: 4096
+    temperature: 0.2
+    # HTTP timeout in llm/client.py; boot validation requires graph_timeout_sec
+    # to exceed this by at least 30s. gate.py cancels the await, not its worker,
+    # so retries or slow work can still continue after the graph deadline.
+    # Measure local throughput with scripts/measure_local_llm_throughput.py.
+    timeout_sec: 720  # Boot margin: api.graph_timeout_sec >= timeout_sec + 30.
+    retry:                  # bounded exp-backoff on transport/5xx/429; 4xx AND read-timeouts fail fast
+      max_retries: 2        # extra attempts beyond the first (applies to transport/5xx/429 only)
+      backoff_base_sec: 0.5 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (0.5s, 1s)
+      backoff_max_sec: 30.0 # hard ceiling on a single backoff sleep; guards against a mis-tuned base/retries blocking the worker
+      # Local TimeoutException failures are not retried (llm/client.py), avoiding
+      # another full timeout after the graph's outer deadline.
+    # Optional local backend failover (opt-in). When enabled, a short HTTP probe
+    # prefers primary (above); if unreachable, LM Studio (or any OpenAI-compat
+    # loopback server) is used for LocalLLMClient + /health. Not hybrid/cloud —
+    # loopback only. fallback.model is REQUIRED when enabled (do not reuse the
+    # Ollama tag; LM Studio ids usually differ).
+    fallback:
+      enabled: false
+      provider: "lmstudio"                       # label only; same OpenAI-compat stack
+      base_url: "http://127.0.0.1:1234/v1"       # DevSkim: ignore DS162092,DS137138 - LM Studio loopback
+      model: "qwen3.8-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.8:27b-mlx` verbatim
+      probe_timeout_sec: 1.5                     # discovery only; generate still uses timeout_sec
+  embeddings:
+    provider: "sentence-transformers"
+    model: "all-MiniLM-L6-v2"
+    dim: 384
+    cache_dir: ".emb_cache"
+    # retrieval/embeddings.py fixes the query-cache size at import time:
+    # CYCLAW_EMBED_CACHE_SIZE overrides its 2048-entry default.
+  grok:
+    # gate.py constructs this client only in hybrid mode with enabled: true;
+    # graph.py also requires per-request consent and a selected, available client.
+    enabled: true
+    base_url: "https://api.x.ai/v1"
+    model: "grok-4.5"   # External fallback model; local cost estimates live in utils/spend.py.
+    # HTTP timeout; llm/client.py applies the retry policy below.
+    timeout_sec: 90
+    max_tokens: 2048
+    temperature: 0.2
+    # Grok cannot use "none"; omitted defaults to high; low is the RAG-fallback cost/latency pin.
+    reasoning_effort: "low"
+    retry:                  # only 5xx/429/timeouts are retried — never 4xx, so no wasted xAI spend on bad requests/auth
+      max_retries: 2        # extra attempts beyond the first
+      backoff_base_sec: 1.0 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (1s, 2s)
+      backoff_max_sec: 30.0 # hard ceiling on a single backoff sleep; guards against a mis-tuned base/retries blocking the worker
+  claude:
+    enabled: true
+    base_url: "https://api.anthropic.com/v1"
+    model: "claude-sonnet-5"   # Second external fallback; constructed by gate.py when enabled.
+    anthropic_version: "2023-06-01"
+    # Same bounded HTTP/retry policy as Grok; see llm/client.py.
+    timeout_sec: 90
+    max_tokens: 2048
+    retry:
+      max_retries: 2        # extra attempts beyond the first; never retries 4xx/auth errors
+      backoff_base_sec: 1.0
+      backoff_max_sec: 30.0
+
+corpus:
+  path: "data/corpus"
+  extensions: [".md", ".txt"]
+
+indexing:
+  chroma_path: "index/chroma_db"
+  bm25_path: "index/bm25.json"
+  collection_name: "cyclaw_kb"
+  chunk_size: 512
+  chunk_overlap: 50
+  batch_size: 50
+  # Semantic (vector) backend. "chroma" (default) keeps the embedded, zero-config,
+  # offline-first PersistentClient. "pgvector" stores/queries the 384-dim embeddings
+  # in PostgreSQL (requires a running server — a deliberate move off local-first).
+  vector_backend: "chroma"
+  # pgvector DSN (only used when vector_backend=pgvector). Falls back to the
+  # CYCLAW_VECTOR_DB_URL or CYCLAW_DB_URL env vars when null.
+  # database_url: null
+  # BM25 (keyword) stays file-based (bm25_path) regardless of vector_backend.
+
+retrieval:
+  top_k_semantic: 5
+  top_k_keyword: 5
+  rrf_k: 60                # Authoritative RRF k — read by hybrid_search.py
+  # Token budget for the prompt INPUT to the local LLM. graph.py reserves room for
+  # the soul preamble + query + framing and gives the rest to retrieved context
+  # (query/soul-aware budget, CHARS_PER_TOKEN below), so the assembled prompt input stays
+  # within this many tokens. This bounds both the RAG (local_llm) and offline
+  # best-effort paths. The no-stall guarantee:
+  #   Ollama context length  >=  max_context_tokens + models.local_llm.max_tokens + ~1500
+  # 8000 + max_tokens 4096 + headroom = 13,596 -> fits the recommended Ollama
+  # context 16384 (macos/ollama-mlx.env). Raised from 4000 (2026-08-28): the 16k
+  # window was only ~59% provisioned at the old floor (9,596). num_ctx — not this
+  # budget — bounds KV memory, so the larger prompt costs additional prefill time
+  # only (measure it on the operator machine: scripts/measure_local_llm_throughput.py),
+  # no new memory ceiling.
+  # This is a NOMINAL budget: graph.py converts it to a character budget at
+  # CHARS_PER_TOKEN (3, a worst-case floor -- see that constant's comment), so
+  # 8000 here means 24,000 characters of assembled prompt input. That holds
+  # inside a 16,384 num_ctx even for symbol-dense corpus text that tokenizes
+  # near 2 chars/token (24,000/2 + 4,096 = 16,096). Do NOT raise past 8000
+  # without raising num_ctx, and do NOT raise CHARS_PER_TOKEN to reclaim
+  # characters -- that is the knob that reopens the "0% processing" stall.
+  # KNOWN BOUND: 2 chars/token is where this sizing stops. A corpus that
+  # tokenizes below it -- CJK is the realistic case, ~1-1.5 chars/token on a
+  # byte-level BPE, since each character is 3 UTF-8 bytes -- overruns the
+  # window again (24,000/1.5 + 4,096 = 20,096). The shipped corpus is English
+  # technical documentation; an operator indexing CJK must lower this value or
+  # raise num_ctx, and will see the documented "0% processing" stall if neither.
+  # NOTE: the guarantee assumes policy.prompt_filter.enabled stays true (it caps
+  # the query at max_input_chars); disabling it lets a huge query exceed the budget.
+  max_context_tokens: 8000
+
+  # min_score: routing threshold used by route_by_score_node (graph.py).
+  # Scores are RRF-fused ranks in [0, 1]; 0.028 is intentionally permissive —
+  # the design goal is "answer locally whenever any document is retrieved"
+  # and only route to user_gate when retrieval nearly completely fails.
+  # RRF scores rarely exceed 0.1 (rank-based, not similarity-based), so
+  # 0.028 ≈ "top result is in the top 3–4 ranked docs". To make the gate
+  # stricter (e.g. require strong semantic alignment), raise toward 0.05–0.08.
+
+  min_score: 0.028
+  hybrid:
+    enabled: true
+
+personality:
+  enabled: true
+  soul_path: "data/personality/soul.md"
+  db_path: "data/personality/cyclaw_soul.db"
+  # Hard ceiling (chars) on the soul text prepended to every LLM system prompt.
+  # Bounds prompt inflation so an oversized/edited soul.md can't push the prompt
+  # past the Ollama context budget (the in-memory soul is truncated to this
+  # on load/apply, with a warning; soul.md on disk is left intact). Keep it well
+  # below the derived char budget (retrieval.max_context_tokens * graph.py's
+  # CHARS_PER_TOKEN = 8000 * 3 = 24,000 chars) so query + context still fit. The
+  # /soul/apply HTTP boundary (SoulEvolutionRequest) caps input at 8192.
+  soul_max_chars: 8000
+  interaction_ttl_days: 365
+  # database_url: null  # Set to "postgresql://user:pass@host/dbname" or use CYCLAW_DB_URL env var.
+  #                     # Optional Postgres backend — see docs/POSTGRES_BACKEND.md (install, TLS,
+  #                     # least-privilege role). Default SQLite stays zero-config / offline-first.
+
+# ===========================
+# Memory subsystem (optional, default-off)  [v0.1 foundation]
+# ===========================
+# Identity (soul.md / PersonalityManager) is NOT memory. This block controls the
+# optional facts + episodes store under memory/. Every switch defaults false —
+# disabled code paths are no-ops and never raise into /query.
+# Design: docs/memory/IMPLEMENTATION_PLAN.md  Operator: docs/memory/README.md
+memory:
+  enabled: false                    # master switch
+  db_path: "data/memory/cyclaw_memory.db"
+  facts:
+    # Gates retrieval fusion ONLY -- never persistence, apply, or read (those
+    # are memory.enabled + propose_apply.enabled). Legacy name `enabled` is
+    # still honored with a startup warning; see memory/flags.py.
+    retrieval_enabled: false
+    max_content_chars: 8192
+    max_active: 10000
+  episodes:
+    enabled: false
+    store_raw_query: false          # default: query_hash only (privacy)
+    max_answer_summary_chars: 2000
+    ttl_days: 365
+    prune_every: 100
+  retrieval_fusion:
+    enabled: false                  # fuse FTS fact hits into hybrid_search
+    max_hits: 3
+    rrf_k: 60
+    source_prefix: "memory:fact:"
+  propose_apply:
+    enabled: false                  # /memory/propose|apply|reject
+  export_html:
+    enabled: false                  # GET /query/export/html
+  consolidation:
+    enabled: false                  # stub only; must stay false in v1
+
+policy:
+  fallback:
+    enabled: true
+    # NOT YET WIRED into graph routing: confirm-then-route is hardcoded in
+    # graph.py's user_gate_router. Boot validation REJECTS any value other
+    # than true so operators cannot set false and believe confirmation is off.
+    # Kept as a placeholder for a future real "skip confirmation" mode — see
+    # tests/test_due_diligence_invariants.py (unwired characterization).
+    require_user_confirm: true
+    send_local_context_to_grok: false
+    send_local_context_to_claude: false
+    # Cost guard: hard ceiling on the prompt forwarded to the external (paid)
+    # Grok API. Generous default — no effect on normal queries; lower it to cap
+    # per-call token spend. Set <= 0 to disable the cap entirely.
+    grok_max_prompt_chars: 8000
+    claude_max_prompt_chars: 8000
+    # Pre-action hook for external provider calls (issue #963).
+    # The configured command receives a JSON payload on stdin with keys:
+    #   action, provider, model, query_hash
+    # and decides via exit code:
+    #   0 -> allow the call; 2 -> deny (route to audit_logger instead).
+    # Any crash, timeout, or other non-zero exit fails closed (deny + audit).
+    # Disabled by default; when disabled the pre-action checkpoint is a no-op.
+    pre_action_hook:
+      enabled: false
+      command: []          # argv list, e.g. ["numbat", "hook", "pre-tool", "--agent", "cyclaw"]
+      timeout_sec: 5
+      # Only "enforce" is supported today. "monitor" (allow the provider call
+      # while still emitting + auditing) is a policy flip that must not ship
+      # until a separate dual-run observation issue is filed.
+      fail_mode: enforce
+      # Emit first-party Numbat events for hook verdicts. Requires enabled: true
+      # and numbat.enabled: true. Default false so existing hooks are unaffected.
+      emit_verdict: false
+  prompt_filter:
+    enabled: true
+    # Regex patterns (single-quoted so backslashes reach the regex engine
+    # literally). \s+ tolerates arbitrary whitespace — spaces, tabs, and the
+    # newlines that corpus chunks routinely contain — and the alternations
+    # cover the previous/all/prior variants. Compiled with re.IGNORECASE.
+    #
+    # Expanded set (40 patterns total) for stronger defense against:
+    # - Direct override / jailbreak
+    # - Role reassignment & impersonation
+    # - Memory/persistence poisoning (zombie agent risk in RAG/soul)
+    # - Authority/urgency social engineering
+    # - Tool/MCP action hijacking
+    # - Light obfuscation
+    banned_patterns:
+      # === Core Override (10) ===
+      - 'ignore\s+(previous|all|prior)\s+instructions'
+      - 'ignore\s+all\s+previous'
+      - 'ignore\s+safety'
+      - 'disregard\s+(previous|all|prior)'
+      - 'forget\s+(previous|all|prior)\s+instructions'
+      - 'override\s+instructions'
+      - 'bypass\s+(safety|filters|restrictions|rules)'
+      - 'do\s+anything\s+now'
+      # injection-redteam hx-01: a filler word inserted between "ignore all"
+      # and the target noun, plus a synonym ("directives"/"guidance") for
+      # "instructions", both defeated the patterns above.
+      - 'ignore\s+(all|any)\s+\S+\s+(instructions|directives|guidance)'
+      # Verified during hx-01 review: hx-01's own pattern requires "all"/"any"
+      # literally, so dropping that word ("ignore earlier directives", no
+      # "all") still bypassed every pattern above -- "earlier" wasn't in the
+      # first pattern's (previous|all|prior) list, and no other pattern covers
+      # "directives"/"guidance" without "all"/"any". Tested against the full
+      # benign corpus plus this phrasing; no false positives introduced.
+      - 'ignore\s+earlier\s+(instructions|directives|guidance)'
+
+      # === Role Reassignment / Impersonation (6) ===
+      # Bare "act as <profession>" is legitimate product language (e.g. "act as
+      # local counsel"); require a jailbreak-ish complement after "act as".
+      - 'you\s+are\s+now'
+      - 'you\s+are\s+no\s+longer'
+      - 'pretend\s+(you\s+are|to\s+be)'
+      # Complements cover invariant-guard G3 ("act as your developer") and
+      # injection-redteam ro-03 ("act as a penetration tester...") without
+      # bare "act as <profession>" (e.g. "act as local counsel").
+      #
+      # Tolerates up to 4 filler words between "act as" and the trigger (e.g.
+      # "act as a rogue AI with no limits") -- the first version of this
+      # pattern anchored triggers immediately after "act as", so any role noun
+      # in between ("a rogue AI", "an evil AI", "a chatbot without...") sailed
+      # through untouched. Confirmed via targeted regex testing, not assumed:
+      # this version blocks all of "act as a rogue AI with no limits", "act as
+      # a chatbot without restrictions", "act as an assistant without any
+      # restrictions", "act as a bot with no filters and no restrictions",
+      # "act as an evil AI that ignores rules" while still passing "act as
+      # local counsel...", "act as project manager...", "act as a translator...".
+      - 'act\s+as\s+(?:\S+\s+){0,4}(if\b|your\s+developer|uncensored|dan\b|without\b|no\s+(?:restrictions?|filters?|limits?|rules?)|jailbreak|penetration\s+tester|unrestricted|\bai\b)'
+      - 'roleplay\s+as|assume\s+the\s+role'
+      # injection-redteam hx-02: "from now on you will/-- behave/act as" is an
+      # uncovered role-swap phrasing distinct from "you are now"/"pretend to be".
+      - 'from\s+now\s+on\s+you\s+(will\s+)?(behave|act)\s+as'
+
+      # === System / New Instructions (7) ===
+      - 'new\s+instructions\s*:'
+      - 'system\s+prompt\s*:'
+      - 'admin\s*:|developer\s+override'
+      - 'sudo\s+mode|root\s+access'
+      - 'maintenance\s+mode.*safety\s+filters\s+disabled'
+      - 'critical\s+update\s+to\s+your\s+instructions'
+      # injection-redteam hx-03: an authority-spoof variant ("a message from
+      # your creators/developers") with no previously-covered trigger phrase.
+      - 'message\s+from\s+your\s+(creators?|developers?|makers?)'
+
+      # === Memory / Persistence Manipulation (8) — HIGH PRIORITY for RAG + soul ===
+      - 'remember\s+(for\s+future|this\s+for\s+later|as\s+permanent|in\s+memory)'
+      - 'save\s+this\s+(for\s+later|in\s+your\s+memory|permanently)'
+      - 'update\s+your\s+(memory|knowledge\s+base|soul)'
+      - 'store\s+this\s+as\s+(a\s+rule|permanent|core\s+instruction)'
+      - 'core\s+instruction,\s*never\s+forget'
+      - 'add\s+to\s+your\s+(knowledge|memory|personality)\s+base'
+      # injection-redteam me-05: the "core instruction" branch above requires
+      # no article; "store this as A core instruction" slipped through it.
+      - 'store\s+this\s+as\s+a\s+core\s+instruction'
+      # injection-redteam hx-05: "persist ... across sessions" (a distinct verb
+      # from "remember"/"save"/"store" above) was not covered by any pattern.
+      # Bare "persist X across sessions" is legitimate product language too
+      # ("how do I persist my settings across sessions?"); the hx-05 probe
+      # itself is "persist this note across sessions: <injected directive>",
+      # so -- same convention as "new instructions:"/"system prompt:" above --
+      # require the colon-introduced directive the actual attack carries,
+      # not the bare phrase. Verified against the full benign corpus plus
+      # "persist my settings/conversation history across sessions"; neither
+      # false-positives.
+      - 'persist\s+.{0,30}across\s+sessions\s*:\s*\S'
+
+      # === Authority / Urgency / Social Engineering (4) ===
+      # Bare "urgent" alone is normal ops/legal language ("urgent deadline");
+      # require urgent+action/request/override/update, or "action required".
+      - 'critical\s+update|important\s+update'
+      - 'from\s+(it\s+department|system\s+administrator)'
+      - 'urgent\s+(action|request|override|update)|action\s+required'
+      # injection-redteam au-02: the article "the" ("from THE IT department")
+      # defeated the bare "from {it department|system administrator}" pattern.
+      # Bare "from the IT department" is also legitimate on its own -- a
+      # security assistant should be able to answer "I got an email from the
+      # IT department, is this phishing?" without tripping its own filter.
+      # The au-02 probe itself is "from the IT department: <injected
+      # directive>"; require that colon-introduced directive, same as the
+      # bare "from {it department|...}" pattern's sibling patterns in this
+      # section do via their own action/urgency complements. Verified against
+      # the full benign corpus plus two phishing-awareness-style questions;
+      # neither false-positives.
+      - 'from\s+the\s+(it\s+department|system\s+administrator)\s*:\s*\S'
+
+      # === Tool / Action / MCP Hijacking (2) ===
+      - 'execute\s+command|run\s+this\s+code'
+      - 'call\s+function|use\s+tool\s+to|invoke\s+tool'
+
+      # === Light Obfuscation / Jailbreak Variants (3) — 40 patterns total ===
+      # Bare "base64" is legitimate (attachment/encoding questions); only pair
+      # it with execute/decode-and-execute style jailbreak phrasing.
+      - 'jailbreak|dan\s+mode|developer\s+mode'
+      - 'decode\s+and\s+execute|base64.{0,40}execute|execute.{0,40}base64'
+      # injection-redteam hx-04: "reveal your instructions" (and the
+      # zero-width-obfuscated variant, now caught because check_input
+      # normalizes NFKC + strips invisible characters before matching) had no
+      # covered trigger phrase — the closest pattern, "system prompt:", only
+      # matches the label form, not the "reveal ..." extraction phrasing.
+      - 'reveal\s+(your\s+)?(instructions|system\s+prompt)'
+    max_input_chars: 4000
+  privacy:
+    redact_emails: true
+    redact_ips: true
+    redact_secrets_like:
+      # Single source of truth for secret redaction in the audit log
+      # (utils.logger.redact_sensitive). Bearer + api_key shapes added so the
+      # audit path matches the secret patterns gate._sanitize_error already
+      # strips from HTTP bodies — closing the gap where a retrieval error string
+      # carrying a token was persisted to audit.jsonl un-redacted (PR #99 #10).
+      # api_key form is anchored to an assignment separator (: or =) so prose
+      # like "the api key docs" is not over-redacted.
+      - 'Bearer\s+[A-Za-z0-9\-_.]+'                                   # Authorization bearer tokens
+      - '[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]["''\s]*[:=]["''\s]*[\w\-.]{4,}'  # api_key= / "api-key": forms
+      - "AKIA[0-9A-Z]{16}"           # AWS access keys
+      - "xox[baprs]-[0-9a-zA-Z-]+"  # Slack tokens
+      - "ghp_[a-zA-Z0-9]{36}"        # GitHub PATs
+      - "sk-[a-zA-Z0-9]{20,}"        # OpenAI-style keys (matches gate._sanitize_error)
+      # Anthropic keys (sk-ant-api03-...) contain hyphens inside the token body,
+      # so the OpenAI-style pattern above (no hyphens allowed) never matches them.
+      - "sk-ant-[a-zA-Z0-9_-]{20,}"  # Anthropic (Claude) API keys
+      - "xai-[a-zA-Z0-9]{20,}"       # xAI (Grok) API keys
+
+api:
+  # Enforced at runtime, not just documented: gate.py's main() refuses to serve
+  # on a non-loopback address, because /query, /health, / and /static/* carry no
+  # authentication. Set CYCLAW_ALLOW_NON_LOOPBACK_BIND=1 to override, and put
+  # your own auth in front of CyClaw before you do. config-guard's C4 asserts the
+  # same rule statically, but only against committed config -- this covers the
+  # working copy. The container is unaffected (its CMD binds 0.0.0.0 inside the
+  # network namespace and docker-compose publishes 127.0.0.1:8787:8787).
+  host: "127.0.0.1"  # DevSkim: ignore DS162092 - loopback-only binding by design
+  port: 8787
+  # Overall server-side deadline for one /query (retrieval + graph + LLM). The
+  # graph invoke is wrapped in asyncio.wait_for; on exceed the endpoint returns
+  # HTTP 504 instead of holding the request open, so a stalled Ollama /
+  # retrieval can't hang a client indefinitely. Keep this >= the inner
+  # models.local_llm.timeout_sec (720) so normal slow inference is not cut off;
+  # the margin covers retrieval + soul-DB time. The 60s margin (double the 30s
+  # documented floor) exists because the FIRST query after boot also pays a cold
+  # sentence-transformers load inside this same deadline, before the LLM call --
+  # embeddings are pinned to CPU on purpose (retrieval/embeddings.py EMBED_DEVICE).
+  # Keeping the inner LLM timeout the one that fires first means the operator sees
+  # the diagnostic LLM error, not a generic 504.
+  graph_timeout_sec: 780  # Must exceed models.local_llm.timeout_sec (720) — the 60s margin covers retrieval + routing + audit overhead. Formula: graph_timeout >= llm_timeout + 30.
+  # Whether GET /health probes the external providers (Grok, Claude) for
+  # liveness. Ships FALSE, and that default is a security choice, not a
+  # performance one: /health is the only route with neither auth nor a rate
+  # limit, so probing from there turns an open endpoint into an authenticated
+  # outbound call to a third party on your own API key — triggerable by any
+  # local process, and cross-origin by any page your browser loads (GET is a
+  # CORS-simple request). With this false, /health reports local health only and
+  # makes zero outbound calls; app.mode and the per-provider enabled flags are
+  # unaffected, and the /query triple gate is untouched either way. Turn it on
+  # only if you want provider liveness in /health and accept that egress.
+  health_probe_external_providers: false
+  rate_limit:
+    max_requests: 60       # per-IP request ceiling within the window
+    window_seconds: 60     # sliding-window length in seconds
+    # null = in-memory (counters reset on restart). Set to a sqlite path such as
+    # "data/rate_limits.db" so per-IP counters survive process/container restarts.
+    persist_path: null
+    # Optional Postgres persistence (takes precedence over persist_path). Set to a
+    # "postgresql://user:pass@host/dbname" DSN, or leave null and use the
+    # CYCLAW_RATELIMIT_DB_URL env var. In-memory stays the default. Does NOT
+    # fall back to CYCLAW_DB_URL (the personality DB URL) — set this
+    # explicitly to opt rate-limiting into Postgres.
+    # database_url: null
+  # Stage 4: when enabled is the literal boolean true, gate._serve passes
+  # certfile/keyfile to uvicorn.run(ssl_certfile=..., ssl_keyfile=...).
+  # Missing or unreadable files fail closed at boot (no plaintext socket
+  # with Secure cookies). Quoted "true" is OFF. Generate a LAN self-signed
+  # pair with `cyclaw-gen-cert`. The Docker CMD still bypasses _serve --
+  # this wiring covers `python gate.py` / `cyclaw-server` only.
+  # The same flag also marks the session cookie Secure and participates
+  # in the loopback bind guard (with auth.enabled + the /query probe).
+  # Background: docs/AUTHENTICATION_DESIGN.md §5/§7.
+  tls:
+    enabled: false
+    certfile: "data/tls/cert.pem"
+    keyfile: "data/tls/key.pem"
+
+# Per-user authentication (docs/AUTHENTICATION_DESIGN.md). Ships false, like
+# every other CyClaw subsystem (agentic/telegram/guardrails). Stage 2 wires
+# /auth/login, /auth/logout, /auth/whoami, sessions, and per-device bearer
+# tokens (utils/authn_manager.AuthManager). Stage 3 attaches
+# require_session_or_token to POST /query when this flag is the literal
+# boolean true (session cookie or named device token). The shipped false
+# leaves /query open. Quoted "true" is still OFF.
+#
+# It also participates in gate.py's loopback bind guard, alongside
+# api.tls.enabled below: a non-loopback bind is allowed only when BOTH flags
+# are the literal boolean true (a quoted "true" is a string and reads as OFF
+# -- gate.py does not let stray quotes decide a security gate) AND /query is
+# demonstrably carrying an authentication dependency, checked at runtime
+# rather than assumed. That third condition is what stops these two flags
+# alone from opening a LAN bind if /query is not actually carrying the
+# dependency (the probe is runtime, not a third config flag). Stage 3
+# attaches that dependency when this flag is on, so a LAN operator who also
+# sets api.tls.enabled is not stuck carrying CYCLAW_ALLOW_NON_LOOPBACK_BIND.
+# Read the design doc before enabling this on a non-loopback bind. TLS on
+# the socket is still Stage 4.
+#
+# Turning this on for the first time with no existing accounts creates one:
+# username "admin", with NO usable password -- the account is seeded with the
+# hash of a random secret that is discarded on the spot, never printed,
+# logged, or stored in plaintext (a printed one-time password was the
+# original design; CodeQL alert #1057 flagged it, and correctly: a service's
+# stdout is persisted by journald/Docker/log shippers, so "printed once" was
+# never really once). Set the first real password on the server machine with
+# `cyclaw-user passwd admin` (prompts via getpass, no echo) or the loopback
+# Set-password panel on the terminal (:8787) and harness (:8790). Manage
+# accounts after that with the same local-only CLI (add/list/disable/enable/
+# passwd/token) -- see utils/authn_cli.py. No account exists until you turn
+# this on; nothing is ever created automatically.
+auth:
+  enabled: false
+  # SQLite by default (relative paths anchor to the repo root, matching
+  # personality.db_path's convention). Postgres via this key set to a
+  # postgresql:// DSN, or the CYCLAW_AUTH_DB_URL env var -- deliberately its
+  # OWN env var, not the personality subsystem's CYCLAW_DB_URL: see
+  # utils/authn_store.py's module docstring for why sharing it would be a
+  # surprising cross-subsystem coupling for the higher-sensitivity auth data.
+  db_path: "data/auth/cyclaw_auth.db"
+  # database_url: null
+  session:
+    # Confirmed 2026-08-08 (docs/AUTHENTICATION_DESIGN.md §10.2): 12h idle /
+    # 7d absolute, both configurable. A session dies from EITHER limit,
+    # whichever is reached first -- idle_timeout_sec resets on every valid
+    # use (a rolling window); absolute_timeout_sec does not.
+    idle_timeout_sec: 43200
+    absolute_timeout_sec: 604800
+
+logging:
+  # DEBUG for CyClaw's OWN loggers (the cyclaw.* namespace). Audited before
+  # turning this up: the only logger.debug calls in the request path are
+  # graph.py's four, which log chunk counts and context-budget arithmetic --
+  # never query text, prompts, or answers. The audit log's SHA-256-only
+  # contract (CLAUDE.md's "no raw query text" rule) is unaffected: that is a
+  # separate JSONL stream written by utils/logger.py's audit_log().
+  level: "DEBUG"
+  log_file: "logs/cyclaw.log"
+  # Loggers OUTSIDE the cyclaw.* namespace (httpx, chromadb, uvicorn,
+  # langgraph) previously reached no file at all -- they went to whatever the
+  # process root logger pointed at. They now land in log_file above too.
+  capture_third_party: true
+  # ...but at their own floor, NOT the DEBUG above. This gap is deliberate and
+  # load-bearing: httpcore's DEBUG output is wire-level and includes the
+  # Authorization header of every outbound Grok/Claude/Ollama call, so raising
+  # this to DEBUG would write live API keys into logs/cyclaw.log. Raise it only
+  # for a scoped debugging session, and treat the resulting file as secret.
+  third_party_level: "INFO"
+  audit_file: "logs/audit.jsonl"
+  spend_file: "logs/spend.jsonl"
+  # Only include_query_hash is read (utils/logger.py). The audit record's
+  # other fields (top_score, retrieval_mode, online_escalated, model_used,
+  # llm, llm_model) are always written; there are no per-field include toggles.
+  # model_used carries the ROLE ("local"/"grok"/"claude"/"offline-best-effort");
+  # llm_model carries the concrete tag that answered, and llm a human summary.
+  # model_used's vocabulary is deliberately frozen -- metrics.py buckets on it
+  # and detects online escalation from its prefix, so historical lines stay
+  # comparable. See graph.py's _llm_identity.
+  audit_fields:
+    include_query_hash: true
+
+# Numbat dual-write projection (issue #959 / #961). Since the mainline plane
+# landed this runs ON the request path but never in front of the answer: it
+# fires inside audit_log, at the terminal audit_logger node (I4), after the
+# response is already computed, and is fail-soft end to end -- a projection
+# failure degrades to a logger.warning and never reaches the caller.
+# Emitter writes schema 0.3.0; CI pins the Numbat 0.2.0 CLI (that schema).
+# audit.jsonl stays authoritative; this is a derived forensic stream.
+# Two producer planes write here: the out-of-band action plane (agentic /
+# ops_runner via utils/numbat_emitter.emit_numbat_*) and the mainline audit
+# trail (utils/logger.audit_log projects every redacted audit record via
+# utils/numbat_emitter.project_audit_record, tagged
+# evidence.artifact_type "cyclaw_audit_jsonl"). Disable to silence both.
+numbat:
+  enabled: true
+  output_path: "logs/numbat-events.ndjsonl"
+  # Size-based single-generation rollover: at or past this many bytes the
+  # stream is renamed to <output_path>.1 (replacing any previous .1) and a
+  # fresh file starts. The mainline plane projects EVERY audit record here,
+  # so without a cap the file grows without bound on a busy instance. 0
+  # disables. Fail-soft like the rest of the emitter -- a failed rename keeps
+  # appending rather than dropping events. audit.jsonl (the authoritative
+  # stream) is unrelated and never rotated by this.
+  max_bytes: 52428800       # 50 MiB
+  source_agent: "unknown"   # "cyclaw" is not a legal Numbat enum
+  source_type: "hook"
+  # CEL sanitizer backend (issue #1128 Slice B). Monitor-only: rules evaluate
+  # structured fields (query_hash, top_score, answer_model, guardrail_*,
+  # model_provider, source_hashes) and emit a low-confidence Numbat event on
+  # match. They do NOT block /query. The regex banned_patterns remain the
+  # fail-closed baseline. Disabled by default; when false, cel-python is not
+  # imported on the request path.
+  cel:
+    enabled: false
+    rules: []               # list of CEL expression strings
+    max_rule_ms: 20         # per-rule budget; log warning if exceeded
+
+security:
+  # Decorative: no code reads require_env (verified repo-wide grep, 2026-07).
+  # The server boots fine without GROK_API_KEY set; Grok simply reports
+  # unavailable. Kept as operator-facing documentation of the expected env,
+  # not an enforced boot gate. See CLAUDE.md §4 "Environment & install".
+  require_env:
+    - "GROK_API_KEY"
+  # Operator opt-out from the CYCLAW_API_KEY Bearer-token gate (require_api_key
+  # in gate.py and utils/auth.py) -- NOT the separate session/RBAC /auth/*
+  # system, which stays governed by auth.enabled regardless of this flag.
+  # Read by both gate.py (soul/*, ops/*, memory/*, audit/summary -- 18 routes)
+  # and harness/server.py (29 routes behind its `guarded` list, including
+  # /api/agent/run+push+publish and /api/keys).
+  #
+  # Ships false: unchanged fail-closed behavior (an unset CYCLAW_API_KEY
+  # refuses the endpoint; a wrong key 401s).
+  #
+  # When true, the bypass is granted ONLY to a request that (a) has a loopback
+  # socket peer AND (b) carries no reverse-proxy forwarding header
+  # (X-Forwarded-For/-Host/-Proto, X-Real-IP, Forwarded). Both halves are
+  # required: a proxy running ON THIS HOST terminates the remote connection and
+  # opens its own from 127.0.0.1, so the peer alone would hand the bypass to
+  # anyone who can reach the proxy. Header PRESENCE is the signal; the value is
+  # attacker-controlled and is never parsed.
+  #
+  # RESIDUAL GAP, stated plainly: a proxy that strips those headers is
+  # indistinguishable from no proxy at all. Do NOT enable this flag on a host
+  # where anything fronts CyClaw. The flag is for a machine you use directly.
+  # That is deliberately keyed on the peer rather than:
+  #   * the Host header -- attacker-supplied; TrustedHostMiddleware is a
+  #     DNS-rebinding control, not authentication; or
+  #   * the bind address -- unknown to a request handler, and the bind guard
+  #     below runs only under main(), which `uvicorn gate:app --host 0.0.0.0`
+  #     (the shipped container CMD) and `uvicorn harness.server:app` skip.
+  # So entries in allowed_hosts / allowed_origins below do NOT widen this: they
+  # filter Host/Origin headers on requests that already arrived and open no
+  # listening socket. LAN names there cannot make a loopback-bound server
+  # reachable from the LAN, and even a genuinely remote request is refused the
+  # bypass. config-guard's C13 ignores those lists for exactly this reason.
+  #
+  # What DOES matter is the bind. gate.py's _require_loopback_bind refuses to
+  # start when this is true and api.host is non-loopback -- including via the
+  # auth.enabled + api.tls.enabled route past loopback, since those prove the
+  # QUERY path carries a session and say nothing about the API-key routes this
+  # flag opens. C13 warns on that same pair. This is defence in depth; the
+  # per-request peer check above is the control that holds everywhere.
+  #
+  # DOCKER: the flag is inert in a container. NAT rewrites the source address,
+  # so the peer is the bridge gateway (172.x), never loopback, and the routes
+  # stay key-gated. Not a defect to route around: from inside the container a
+  # request published on 127.0.0.1:8787 and one published on 0.0.0.0:8787 are
+  # indistinguishable, so trusting the bridge would re-expose every
+  # containerised deployment. Set CYCLAW_API_KEY in the container instead
+  # (docker-compose.yml does not set one today).
+  api_key_optional: false
+  # Starlette buffers a request's entire raw body into memory before Pydantic
+  # validation runs, so schemas/api.py's per-field max_length caps (largest is
+  # 65536 chars) don't bound memory use for an oversized POST -- they only
+  # bound what survives parsing. 1 MiB gives generous headroom over the
+  # largest real payload (one 65536-char field plus JSON structural overhead)
+  # while still rejecting a grossly oversized body before it's buffered.
+  # Enforced via the client-declared Content-Length header only (gate.py's
+  # _MaxBodySizeMiddleware) -- a client that lies about Content-Length or uses
+  # chunked transfer-encoding without one is not covered by this check, which
+  # is an accepted gap under this project's single-operator, loopback-bound
+  # threat model (docs/THREAT_MODEL.md), not a defense against a sophisticated
+  # adversary already on the loopback interface.
+  max_request_body_bytes: 1048576
+  allowed_origins:
+    # Every entry MUST include an explicit port. A scheme+host with no port is
+    # implicit :80 (http) or :443 (https) -- a different browser origin from
+    # the console on :8787. Portless rows made a page on loopback :80 a
+    # CORS-simple GET to unauthenticated /health (corpus_path) and
+    # /index/status (#1298 N9). Do not re-add portless rows.
+    - "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
+    - "http://localhost:8787"  # DevSkim: ignore DS162092,DS137138
+    # "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
+    # "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
+    # "https://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
+    # "https://localhost:8787"  # DevSkim: ignore DS162092,DS137138
+    # "https://10.0.0.112:8787"  # DevSkim: ignore DS137138
+    # "https://10.0.0.111:8787"  # DevSkim: ignore DS137138
+    # NOTE: "null" is deliberately absent from this list — do not re-add it.
+    # curl/MCP clients send no Origin header at all, so they are never subject
+    # to CORS filtering and lose nothing. "null" in allow_origins is invalid
+    # for starlette CORSMiddleware and would cause a runtime error or silent
+    # rejection. It would also match every opaque-origin context (browsers send
+    # "Origin: null" for file:// URLs, sandboxed iframes, certain data:/blob:
+    # contexts, and some extension/worker/redirect scenarios). If a browser or
+    # test flow ever sends "Origin: null", serve it from one of the http
+    # origins listed above instead of re-enabling null.
+
+  # TrustedHostMiddleware Host allow-list (DNS-rebinding defense, PR #99).
+  # Host matching ignores port. Add any name/IP you reach CyClaw by; a request
+  # whose Host header is not listed gets HTTP 400 before any handler runs.
+  allowed_hosts:
+    - "127.0.0.1"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
+    - "localhost"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
+    - "10.0.0.112"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
+    - "10.0.0.111"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
+    # temp lab workaround that shouldnt ship like this without full auth/mfa 
+# ===========================
+# sync: Dropbox corpus sync (out-of-band, rclone-based)
+# ===========================
+# Absence of this block disables sync entirely. Sync runs strictly via
+# `python -m sync.cli` — never imported by gate.py, graph.py, or the MCP server.
+# The Dropbox refresh token lives ONLY in rclone.conf, never here.
+sync:
+  enabled: false                 # off by default; `sync.cli sync` no-ops (exit 0) while false
+  local_path: "data/corpus"      # validated: absolute, under repo data/corpus, a dir
+  remote_name: "dropbox_cyclaw"  # must match `rclone listremotes`
+  remote_path: "CyClaw/corpus"   # folder inside the Dropbox App Folder
+  direction: "pull"              # "pull" (safe default) | "bisync" (opt-in, discouraged)
+  include_soul: false            # deprecated no-op — soul is never mirrored (local_path is confined to data/corpus); key kept only so old configs still load
+  reindex_on_change: true        # exit 10 when data/corpus/** changed
+  auto_reindex: false            # when true, `sync.cli sync` runs the indexer itself on change (no exit-10 cron chain needed)
+  checksum: true                 # rclone --checksum (hash compare, not mtime)
+  max_delete: 20                 # safety fuse: abort if > N deletions
+  max_transfer: "1G"             # safety fuse: abort if run would move > this
+  sync_timeout_sec: 3600         # wall-clock ceiling on the rclone run; 0 = unbounded. Guards against a hung rclone wedging the single-instance lock.
+  sync_retries: 0                # outer retries on a TRANSIENT rclone failure (exit 5); 0 = single-shot (default)
+  retry_backoff_sec: 5.0         # base for exponential backoff between retry attempts
+  fast_list: false               # rclone --fast-list: one bulk remote listing (faster on large corpora, more memory)
+  # bwlimit: "8M"                # optional rclone --bwlimit rate ("8M", "512k", "off"); unset = no limit
+  schedule_hour: 2               # 24h local time (cron/timer/Task Scheduler)
+  schedule_min: 0
+  scheduler_backend: "cron"      # "cron" (portable, default) | "launchd" (Darwin-only, opt-in; see docs/work/MACOS_LAUNCHD_INTEGRATION_PLAN.md)
+  schedule_frequency: "daily"    # "daily" | "weekly" | "monthly"
+  schedule_weekday: 1            # 0-7 (0/7=Sunday, 1=Monday); used only when schedule_frequency: "weekly"
+  schedule_day: 1                # 1-31; used only when schedule_frequency: "monthly"
+  conflict_resolve: "newer"      # bisync-only: newer modtime wins
+  conflict_loser: "rename"       # bisync-only: loser saved as .conflict1 (never deleted)
+  # extra_excludes:              # optional, appended AFTER hardened block
+  #   - "scratch/**"
+
+# ===========================
+# Agentic layer (out-of-band)  [v0.1 — experimental]
+# ===========================
+# Absence of this block, or enabled: false, disables the agentic layer entirely.
+# It runs strictly via `python -m agentic.cli` — never imported by gate.py,
+# graph.py, or the MCP server. Reads use the `gh` CLI (argv-list, no shell, no
+# token forwarded by CyClaw). The GitHub write path is IMPLEMENTED and ARMED at the code flag
+# (agentic/writer.py EXECUTION_ENABLED=True) with mode/writes_enabled open
+# below. The layer master switch (agentic.enabled) still ships false so the
+# CLI no-ops until you opt in. Per-call reason + confirm still required.
+# See docs/agentic/GITHUB_WRITE_ENABLEMENT.md for the full gate chain.
+agentic:
+  enabled: false                 # off by default; CLI no-ops (exit 0) while false
+  repo: "cgfixit/CyClaw"         # validated: owner/name, no shell metacharacters
+  mode: "write"                  # "read" | "write" (armed; still needs enabled + reason + confirm)
+  writes_enabled: true           # second flag; writes need mode=write AND this AND reason AND confirm
+  gh_min_version: "2.40.0"       # `gh` version floor (X.Y.Z)
+  gh_timeout_sec: 30             # wall-clock ceiling per gh read subprocess
+  gh_retries: 2                  # extra attempts on a TRANSIENT gh failure (timeout/5xx/429); deterministic errors fail fast
+  registry_path: "data/agentic/skills_registry.json"  # validated: under repo data/ tree
+  allowed_read_ops:              # only these read ops may run
+    - pr_view
+    - pr_list
+    - pr_diff
+    - issue_view
+    - issue_list
+    - repo_view
+  # Config for the real-repo coding pipeline (agentic/real_repo_loop.py) and,
+  # separately, the now-retired (for now, will revisit deep agent within the real repo loop later) Deep Agents graph. Still never imported by the
+  # core request path. NOT "phase 1 config only" any more: every key below is
+  # read on the shipped `real-repo-run` path -- workspace_root, enabled, model,
+  # base_url, protected_write_paths and max_write_budget_bytes by agentic/cli.py,
+  # allow_git_write_tools inside repo_workspace.py. It is disabled by default,
+  # not unused.
+  deepagent_github:
+    enabled: false
+    provider: "ollama"                          # "ollama" | "openai_compatible"
+    base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
+    model: "qwen3.8:27b-mlx"
+    # Per-call HTTP timeout for the planner's own model call (LocalProposerClient /
+    # ChatModelProposerClient) -- a separate knob from models.local_llm.timeout_sec
+    # (720) above: this package is never imported by graph.py/gate.py (I6), so it
+    # cannot reuse that value, and this loop's own prompt is comparably large (up
+    # to ~24k chars of declared files + GitHub context + prior-iteration feedback).
+    # Was hardcoded at 30s with no override before this key existed -- a hard,
+    # unrecoverable, first-iteration failure for any real local-model completion.
+    planner_timeout_sec: 720
+    # Reserved completion tokens for each real-repo plan/coding call. Keep
+    # prompt + this budget below Ollama num_ctx; raise only after measuring.
+    planner_max_tokens: 3072
+    allow_deepagents_dependency: false           # extras must be installed explicitly
+    # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
+    # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push
+    # all gate on allow_git_write_tools below. Setting this false does not stop
+    # a real-repo filesystem write; that is what allow_git_write_tools is for.
+    allow_filesystem_write_tools: false
+    allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
+    allow_github_writes: false                   # writer.py remains the write-policy boundary
+    # Git plumbing (checkout -b/add/commit/diff/push) inside a clone this
+    # layer made itself under workspace_root. RepoWorkspaceTools.push_branch
+    # gates on this same flag and DOES reach a real remote (origin) when
+    # armed -- it is not local-only. It still never calls the GitHub API
+    # (opening/commenting on a PR is agentic/writer.py's job, gated
+    # separately). A separate gate from allow_shell_execution above, which
+    # means "give the model a generic shell tool" (still hard-refused/
+    # unimplemented).
+    allow_git_write_tools: false
+    # Real-repo loop diff-scope gate: a candidate that writes into any of these
+    # (path-prefix match) is refused outright, because these are exactly the
+    # files that judge the candidate's own acceptance -- rewriting them would
+    # let a candidate pass its own checks by construction. See
+    # agentic.real_repo_loop.decide_real_repo_candidate.
+    protected_write_paths:
+      - "tests/"
+      - "conftest.py"
+      - ".github/"
+      - ".git/"
+      - "pyproject.toml"
+      - "setup.cfg"
+      - "pytest.ini"
+      # ruff reads .ruff.toml / ruff.toml at HIGHER precedence than the
+      # [tool.ruff] table in pyproject.toml, so protecting pyproject.toml alone
+      # left the lint check trivially neuterable: a candidate that CREATES
+      # .ruff.toml with an empty `select` makes the operator's own `ruff`
+      # verification pass vacuously while pyproject.toml sits untouched and the
+      # diff shows one small new file. tox.ini and noxfile.py are here for the
+      # same reason -- both can redefine how a declared check actually runs.
+      - ".ruff.toml"
+      - "ruff.toml"
+      - "tox.ini"
+      - "noxfile.py"
+      - ".claude/"
+      - ".codex/"
+      # config.yaml is itself the single source of truth for every tunable
+      # (banned_patterns, retrieval.min_score, rate limits, and this very
+      # list) -- a candidate that loosens a safety tunable here, inside its
+      # own jailed clone, could have a config-validating check in --checks-file
+      # (config-guard/invariant-guard) pass by construction, the identical
+      # reward-hacking pattern this list already closes for .ruff.toml etc.
+      # CLAUDE.md is the operating manual whose rules govern this whole loop.
+      - "config.yaml"
+      - "CLAUDE.md"
+    max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
+    # Blocks an iteration whose proposed file content is shaped like an
+    # exfiltration, a reverse shell, an obfuscated exec, or a pipe-to-shell
+    # install. Separate from the prompt-injection scan that already ran here:
+    # that one asks "is this trying to talk to a model", which answered ZERO
+    # findings for a real SSH-key exfiltration payload (demonstrated against
+    # the live loop, 2026-08-02). A HEURISTIC, not a complete control -- see
+    # agentic/harness_optimizer/governance.py::inspect_code_shape for exactly
+    # what defeats it. Set false only if a legitimate change is genuinely
+    # blocked; the human diff review at pending_decision is the real gate
+    # either way.
+    scan_code_shape: true
+    # Outbound-prompt length cap for sanitize_handoff (agentic/deepagent_github/
+    # handoff.py) -- deliberately separate from policy.prompt_filter.
+    # max_input_chars (4000, tuned for a short RAG chat query). A real-repo-loop
+    # prompt bundles the instruction, every declared read_paths file's content,
+    # and a quoted PR/issue diff -- routinely tens of thousands of characters,
+    # which is why this is not the same number.
+    max_handoff_chars: 200000
+    workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
+    # Cloud coding-loop providers. The agentic analog of app.mode: "hybrid" --
+    # gate 3 of the six-condition chain (agentic.enabled, deepagent_github.enabled,
+    # allow_cloud_providers, providers.<name>.enabled, the provider's API key env
+    # var, and a per-run --confirm-online). Setting a provider enabled: true while
+    # allow_cloud_providers is false is a CONFIG ERROR, not a silent no-op.
+    allow_cloud_providers: true
+    providers:
+      grok:
+        enabled: true
+        model: "grok-4.5"                        # cite models.grok.model; re-verify at enable time
+      claude:
+        enabled: true
+        model: "claude-sonnet-5"                 # cite models.claude.model; same drift warning
+  # Governed harness optimizer. Candidate application records only a versioned local
+  # artifact after all deterministic gates plus an explicit human reason/confirmation;
+  # it never mutates source, soul.md, or GitHub.
+  harness_optimizer:
+    enabled: false
+    max_iterations: 3
+    require_human_confirm_for_accept: true
+    output_dir: "data/agentic/harness_optimizer/runs"
+    memory_dir: "data/agentic/harness_optimizer/memory"
+    allow_local_model_judge: false
+
+# ===========================
+# Filesystem connector (out-of-band)  [v0.1 — experimental]
+# ===========================
+# Absence of this block, or enabled: false, disables the filesystem connector
+# entirely. It runs strictly via `python -m agentic.fsconnect.cli` — never imported
+# by gate.py, graph.py, or the MCP server. READS are scoped to allow_roots
+# (read-only). WRITES go ONLY to writable_roots (a separate list), are gated
+# (writes_enabled + human reason + confirm), and are disabled by default. The
+# connector is content-agnostic: it never calls the LLM; write content is supplied
+# via --body-file/stdin (an operator pipes local-LLM/QWEN output in).
+fsconnect:
+  enabled: false                 # off by default; CLI no-ops (exit 0) while false
+  # --- READ scope (read-only) ---
+  allowed_roots: []              # REQUIRED when enabled; each must resolve to an existing dir
+  allowed_fs_ops:                # operator-configurable read subset
+    - fs_list
+    - fs_stat
+    - fs_read
+    - fs_grep
+    - fs_glob                    # find files by glob pattern (read-only, pathsafe enumeration)
+    - fs_largest                 # rank largest files using the same pathsafe enumeration
+  allow_unc_roots: false         # UNC \\server\share roots opt-in (egress risk); default refuse
+  allow_macos_volume_roots: false  # /Volumes network/removable roots require a separate Darwin opt-in
+  max_file_bytes: 5242880        # 5 MiB read cap (enforced via fstat on the open handle)
+  largest_max_entries: 100000    # max files/directories inspected by one largest walk
+  follow_symlinks: false         # hard default; ANY symlink/reparse point under a root is DENIED
+  scan_content: true             # advisory OWASP∪banned_patterns flagging on read content
+  # --- WRITE scope (separate, gated, default-disabled) ---
+  writes_enabled: false          # master write switch; false => write ops return DRY-RUN plans only
+  writable_roots:                # the ONLY paths writes may touch; created at startup if missing
+    - null                       # null => C:\CyClaw-FS (Win) | ~/CyClaw-FS (macOS) | /var/lib/cyclaw-fs (Linux, home fallback)
+  max_write_bytes: 10485760      # 10 MiB write cap
+  require_confirm_destructive: true   # overwrite-existing / move need --confirm AND --reason
+  # --- Phase 2 write-enablement (all default-off / unbounded; safe to omit) ---
+  strict_roots: false            # true => fail closed if a writable root can't be prepared (no ~/CyClaw-FS fallback)
+  block_on_injection_flags: false  # true => refuse a write whose advisory scan flags the content
+  allow_hard_delete: false       # fifth gate: true required for `delete --purge` (bypasses trash); GLOBAL, not per-root
+  trash_retention_days: 30       # deletes go to <root>/.cyclaw-trash; entries purgeable after this many days
+  quota_recompute_hours: 24      # ledger staleness window; older => full lstat-walk recompute before enforcing
+  write_rate_limit:              # per-root (fs:<root>) + global (fs:*) write throttle; separate sqlite file
+    enabled: false               # off by default; when false no throttle is applied
+    max_ops: 30                  # per-root ops allowed per window
+    window_seconds: 60           # sliding window length
+    # global_max_ops: 60         # aggregate ceiling across all roots (default: 2 x max_ops)
+    db_path: "data/fsconnect_rate.db"  # SEPARATE from the gateway limiter's db
+  # writable_roots may also be a mapping to declare a per-root quota, e.g.:
+  #   - path: /var/lib/cyclaw-fs
+  #     quota_bytes: 1073741824  # 1 GiB (null/absent => unlimited)
+  #     max_files: 10000         # (null/absent => unlimited)
+  # --- secondary RAG-indexing of the file-share ---
+  index_enabled: false           # toggle RAG-corpus indexing of index_root on/off
+  index_root: null               # null => defaults to the first writable_root (generate→write→index loop)
+  index_extensions:
+    - ".md"
+    - ".txt"
+    - ".pdf"
+    - ".docx"
+    - ".csv"
+  index_max_file_bytes: 10485760
+  index_incremental: false       # when true, apply() skips re-reading/re-staging files unchanged (size+mtime) since the last run
+
+# ===========================
+# SQL connector (out-of-band, READ-ONLY)  [v0.1 — disabled scaffold]
+# ===========================
+# Disabled-by-default scaffold for read-only on-prem SQL (Postgres / MSSQL). Absence
+# of this block, or enabled: false, is a pure no-op with no effect on existing
+# functionality. Runs only via `python -m agentic.sqlconnect.cli`. Read-only is
+# enforced at the session level; the DSN is read from an environment variable only.
+sqlconnect:
+  enabled: false                 # off by default; disabled scaffold
+  driver: "postgres"             # "postgres" | "mssql"
+  dsn_env: "CYCLAW_SQL_DSN"      # DSN read from this env var only (never hardcoded)
+  allowed_sql_ops:               # operator-configurable read subset (all read-only)
+    - schema_list
+    - table_preview
+    - run_select
+    - explain                    # query plan for a SELECT/WITH (Postgres only)
+    - row_count                  # count(*) for a table without materialising rows
+  read_only: true                # hard: SET TRANSACTION READ ONLY / ApplicationIntent=ReadOnly
+  statement_timeout_ms: 5000
+  max_rows: 1000
+  allow_write: false             # reserved; v0.1 cannot write regardless
+
+# ===========================
+# Passive LAN inventory connector (out-of-band)  [v0.1]
+# ===========================
+# Reads only local host metadata and the operating system's existing neighbor
+# cache. No ping, port probe, subnet sweep, packet send, scheduler, or API route.
+# Every returned address must fall inside one of the explicit RFC1918/loopback
+# subnets below; enabling with an empty or broader scope fails closed.
+netconnect:
+  enabled: false
+  allowed_cidrs: []              # e.g. ["192.168.1.0/24"]; required when enabled
+  allowed_net_ops:
+    - self
+    - arp
+  command_timeout_sec: 5
+  max_neighbors: 512
+
+# ===========================
+# NeMo Guardrails (out-of-band, content-safety layer)  [v0.1 — skeleton]
+# ===========================
+# Disabled-by-default, opt-in defense-in-depth layer. Absence of this block, or
+# enabled: false, is a pure no-op with NO effect on existing functionality: the
+# graph topology stays the sole source of routing/policy. Runs strictly out-of-band
+# (`python -m guardrails.cli`) and is NEVER imported by gate.py, graph.py, or
+# mcp_hybrid_server.py — that isolation preserves the five security invariants.
+# nemoguardrails is an OPTIONAL dependency: the layer soft-imports it and degrades
+# to offline heuristic rails (injection + soul-mutation block + token-overlap
+# grounding) when it is absent. See docs/NeMo/later_development_guideline.md.
+guardrails:
+  enabled: false                 # off by default; CLI no-ops. Also gates graph.py's
+                                  # guardrail_input node (Phase 2): false = pure pass-
+                                  # through (no import of guardrails at all); true =
+                                  # the offline input rail (injection markers + soul-
+                                  # mutation regex, no LLM) runs between route_by_score
+                                  # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
+  engine: "openai"               # Ollama exposes an OpenAI-compatible API
+  base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - loopback Ollama, offline-only
+  model: "qwen3.8:27b-mlx"           # keep in sync with models.local_llm.model
+  nemo_config_dir: "guardrails/config"  # holds config.yml + rails.co (RailsConfig.from_path)
+  metrics_path: "logs/guardrails.jsonl" # SEPARATE stream from logs/audit.jsonl (privacy: hashes only)
+  block_message: "I can't help with that request. It was stopped by a CyClaw safety guardrail."
+  hallucination_threshold: 0.18  # [0..1] token-overlap floor below which an answer is flagged ungrounded
+  input_rails:                   # mirror guardrails/config/config.yml -> rails.input.flows
+    - check_injection
+    - check_jailbreak            # NOT ENFORCED BY THE OFFLINE FLOOR -- model-assisted only
+                                # (NeMo self_check_input prompt, guardrails/config/rails.co's
+                                # "check jailbreak" flow). guardrails/integration.py's
+                                # _offline_checks() only implements check_injection and
+                                # check_soul_mutation; listing it here activates it solely on
+                                # a live NeMo Colang run, same silent-skip shape as
+                                # check_soul_leak below.
+    - check_soul_mutation
+  output_rails:                  # mirror guardrails/config/config.yml -> rails.output.flows
+    - check_grounding
+    - check_soul_leak           # Phase 4b: enforced by the offline check_output
+                                # floor when guardrails.enabled is true. It uses dedicated
+                                # detect_soul_leak, not scan_injection. The graph invokes
+                                # that floor only for local_llm answers; external and
+                                # offline-best-effort legs remain intentionally out of scope.
+  topical_rails:                 # soul/personality-boundary topical flows (rails.co)
+    - stay_in_local_knowledge
+    - no_unauthed_external_advice
+  soul_topics:                   # keywords that flag a turn as soul/personality/identity-related
+    - soul
+    - personality
+    - identity
+    - who are you
+    - your name
+    - your purpose
+    - system prompt
+    - your instructions
+    - persona
+    - short-term memory
+
+# ===========================
+# UNSLOP: offline prose-quality rail for the agentic real-repo loop (default disabled)
+# ===========================
+# Detects AI-writing tells in local-model output inside agentic/real_repo_loop.py.
+# Log-only + non-blocking: findings are appended to rejection feedback but never
+# change the acceptance decision. Never makes a network call; scanners are vendored
+# under agentic/vendor/unslop/.
+unslop:
+  enabled: false
+  metrics_path: "logs/unslop.jsonl"
+
+# ===========================
+# Telegram channel (out-of-band)  [v0.1 — T0–T3 code + partial T4; default disabled]
+# ===========================
+# Absence of this block, or enabled: false, disables the Telegram channel entirely.
+# Runs strictly via `python -m telegram.cli` — never imported by gate.py, graph.py,
+# or mcp_hybrid_server.py. Answers (mode=chat) go only through HTTP POST /query on
+# loopback so I1–I5 stay intact. Bot token is transient: no-echo CLI prompt for
+# manual send/poll, or the configured environment variable for unattended use.
+# Design + phase plan: docs/channels/TELEGRAM_DESIGN.md
+# Threat model: docs/THREAT_MODEL.md §5 seventh amendment.
+telegram:
+  enabled: false                 # off by default; NEED ID AT LEAST TO TURN TRUE - CLI status/test work; send/poll no-op or refuse
+  mode: "chat"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
+  bot_token_env: "TELEGRAM_BOT_TOKEN"  # unattended token source; token is never stored in YAML
+  allowed_chat_ids: []           # REQUIRED non-empty when enabled: true (load fails if empty)
+  # To enable: set enabled: true, keep mode "notify" to start (not "chat"), and put
+  # your real numeric chat id in allowed_chat_ids -- a placeholder string is accepted
+  # by the list-type check but can never match a real update, so the channel would
+  # look armed while silently refusing every message. Leave allow_hybrid_confirm and
+  # media.enabled false unless you have read their sections below.
+  api_base: "https://api.telegram.org"
+  poll_timeout_sec: 30           # long-poll window for getUpdates (mode=chat)
+  max_message_chars: 4000        # align with policy.prompt_filter.max_input_chars
+  allow_hybrid_confirm: false    # T3 master switch; explicit /online on <grok|claude> only
+  hybrid_confirm_ttl_sec: 120    # T3 one-request consent lifetime; hard-capped at 300 seconds
+  rate_limit:
+    max_ops: 20                  # soft ceiling (enforcement hardened in T1/T2 follow-ups)
+    window_seconds: 60
+  query:
+    base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
+    api_key_env: "CYCLAW_API_KEY"
+    timeout_sec: 790             # api.graph_timeout_sec (780) + 10s margin — client must lose the race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a client abort (same pattern as static/terminal.js)
+  media:
+    enabled: false               # T4 default-off; accepts only private-chat /save --confirm attachments
+    fsconnect_root: ""           # REQUIRED when enabled; exact explicit fsconnect.writable_roots entry
+    max_download_bytes: 10485760 # bounded again by fsconnect.max_write_bytes and Bot API's 20 MiB cloud cap
+
+# ===========================
+# OpenTweet X channel (out-of-band)  [v0.1; default disabled]
+# ===========================
+# Absence of this block, or enabled: false, disables the channel entirely.
+# Runs strictly via `python -m opentweet.cli` — never imported by gate.py,
+# graph.py, or mcp_hybrid_server.py. Generation goes only through HTTP POST
+# /query on loopback (user_confirmed_online always false). Default write is
+# an OpenTweet draft; scheduled_date requires schedule_enabled: true.
+# The ot_ key is never stored in YAML. Design: docs/channels/OPENTWEET_DESIGN.md
+opentweet:
+  enabled: false
+  api_base: "https://opentweet.io"
+  api_key_env: "OPENTWEET_API_KEY"
+  topic_file: ""                 # REQUIRED non-empty when enabled: true
+  max_topic_chars: 500
+  max_post_chars: 280
+  schedule_enabled: false        # opt-in OpenTweet scheduled_date
+  schedule_slot: "09:00"         # local HH:MM when schedule_enabled
+  weekday: 1                     # Monday; 0/7 Sunday (launchd + schtasks)
+  fire_hour: 6
+  fire_minute: 0
+  query:
+    base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
+    api_key_env: "CYCLAW_API_KEY"
+    timeout_sec: 790             # api.graph_timeout_sec (780) + 10s margin — client must lose the race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a client abort (same pattern as static/terminal.js)
 # RESTORED_FROM_8958d04c_SEE_FOLLOWUP
