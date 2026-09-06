@@ -127,8 +127,9 @@ def _apply_guardrails_config(rails_config: Any, cfg: GuardrailsConfig) -> None:
         nested = params.pop("model_kwargs", None)
         if isinstance(nested, dict):
             for key, value in nested.items():
-                if key not in params:
-                    params[key] = value
+                if key == "reasoning_effort" or key in params:
+                    continue
+                params[key] = value
         if cfg.reasoning_effort is not None:
             params["reasoning_effort"] = cfg.reasoning_effort
 

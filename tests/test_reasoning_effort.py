@@ -826,7 +826,7 @@ class TestGuardrailsModelParameters:
 
     def test_existing_model_kwargs_are_unpacked(self):
         model = _StubModel()
-        model.parameters = {"model_kwargs": {"seed": 7}}
+        model.parameters = {"model_kwargs": {"seed": 7, "reasoning_effort": "high"}}
         _apply_guardrails_config(_StubRailsConfig([model]), _guardrails_cfg())
         assert model.parameters["seed"] == 7
         assert model.parameters["reasoning_effort"] == "none"
@@ -837,6 +837,14 @@ class TestGuardrailsModelParameters:
         _apply_guardrails_config(_StubRailsConfig([model]), _guardrails_cfg(reasoning_effort=None))
         assert "reasoning_effort" not in (model.parameters or {})
         assert "model_kwargs" not in (model.parameters or {})
+
+    def test_nested_reasoning_effort_does_not_bypass_omit(self):
+        model = _StubModel()
+        model.parameters = {"model_kwargs": {"seed": 7, "reasoning_effort": "high"}}
+        _apply_guardrails_config(_StubRailsConfig([model]), _guardrails_cfg(reasoning_effort=None))
+        assert model.parameters["seed"] == 7
+        assert "reasoning_effort" not in model.parameters
+        assert "model_kwargs" not in model.parameters
 
     def test_non_main_models_are_left_alone(self):
         model = _StubModel(type_="self_check")
