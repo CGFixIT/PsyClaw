@@ -363,6 +363,7 @@ def test_console_documents_goal_and_loop_slash_commands():
     assert "CHAT_BUSY" in html
     assert "function requestLoopStop(" in html
     assert "api('/api/chat/cancel', 'POST')" in html
+    assert "Type /loop stop to abort it" in html
     assert "new AbortController()" in html
     assert "aborting the in-flight turn" in html
     assert "function paintGoalLoop()" in html

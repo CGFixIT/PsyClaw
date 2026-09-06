@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1120,12 +1123,131 @@ def test_loop_history_is_clipped_to_char_budget(cfg, monkeypatch):
     assert sum(len(m["content"]) for m in prior) <= 20
 
 
+def test_chat_busy_includes_recovery_context(client):
+    sid = client.post("/api/sessions", json={"title": "busy"}).json()["session_id"]
+    assert client.app.state.generation_gate.claim() is True
+    try:
+        resp = client.post("/api/chat", json={"message": "hello", "session_id": sid})
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["code"] == "CHAT_BUSY"
+        assert detail["details"]["session_id"] == sid
+        assert detail["details"]["cancel"] == "/api/chat/cancel"
+        assert int(detail["details"]["timeout_sec"]) > 0
+    finally:
+        client.app.state.generation_gate.release()
+
+
 def test_chat_cancel_is_idempotent(client):
     resp = client.post("/api/chat/cancel")
     assert resp.status_code == 200
     assert resp.json()["cancelled"] is True
     # A follow-up chat must still work after the client was recycled.
     assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
+
+
+def _hanging_model_server():
+    """Loopback OpenAI-compatible stub: first POST hangs, later POSTs answer.
+
+    Used to prove /api/chat/cancel actually unblocks a wedged local-model
+    turn. Not a live Ollama.
+    """
+    entered = threading.Event()
+    posts = {"n": 0}
+    lock = threading.Lock()
+    ok = json.dumps({
+        "model": "qwen3.8:27b-mlx",
+        "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_a: object) -> None:
+            return
+
+        def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            with lock:
+                posts["n"] += 1
+                n = posts["n"]
+            if n == 1:
+                entered.set()
+                time.sleep(30)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(ok)))
+            self.end_headers()
+            self.wfile.write(ok)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, int(httpd.server_address[1]), entered
+
+
+def test_abort_in_flight_unblocks_hung_post():
+    httpd, port, entered = _hanging_model_server()
+    try:
+        chat = HarnessChatClient(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3.8:27b-mlx",
+            timeout_sec=15.0,
+        )
+        result: dict[str, object] = {}
+
+        def _call() -> None:
+            try:
+                chat.chat(system_prompt="s", messages=[{"role": "user", "content": "hi"}])
+            except HarnessLLMError as exc:
+                result["err"] = exc
+
+        worker = threading.Thread(target=_call, daemon=True)
+        worker.start()
+        assert entered.wait(3)
+        chat.abort_in_flight()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert "err" in result
+    finally:
+        httpd.shutdown()
+
+
+def test_chat_cancel_releases_hung_generation_gate(cfg):
+    httpd, port, entered = _hanging_model_server()
+    try:
+        chat = HarnessChatClient(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3.8:27b-mlx",
+            timeout_sec=15.0,
+        )
+        app = create_app(cfg, chat)
+        client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+        sid = client.post("/api/sessions", json={"title": "hung"}).json()["session_id"]
+        first: dict[str, object] = {}
+
+        def _hung() -> None:
+            resp = client.post("/api/chat", json={"message": "hang", "session_id": sid})
+            first["status"] = resp.status_code
+
+        worker = threading.Thread(target=_hung, daemon=True)
+        worker.start()
+        assert entered.wait(3)
+        busy = client.post("/api/chat", json={"message": "overlap", "session_id": sid})
+        assert busy.status_code == 409
+        assert busy.json()["detail"]["code"] == "CHAT_BUSY"
+        cancel = client.post("/api/chat/cancel")
+        assert cancel.status_code == 200
+        worker.join(2)
+        assert not worker.is_alive()
+        retry = client.post("/api/chat", json={"message": "after cancel", "session_id": sid})
+        assert retry.status_code == 200
+        assert retry.json()["reply"] == "ok"
+        assert client.app.state.generation_gate.claim() is True
+        client.app.state.generation_gate.release()
+    finally:
+        httpd.shutdown()
 
 
 def test_chat_cancel_calls_abort_in_flight(cfg):
