@@ -1,9 +1,9 @@
+# Console Review Bundle — Reconciliation and Implementation Plan
+
 > **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE. All three "Open items" this doc pointed at issue #1201 are now shipped and verifiable in code: `gate.py:1351` attaches `_reject_cross_site_query` to `/query` **unconditionally** (outside the `if auth_manager is not None:` block at `:1328`), resolving H1; `docs/THREAT_MODEL.md:64,68` documents `GET /index/status` as deliberately exempt from the rate limiter, resolving H2; and `docs/THREAT_MODEL.md:62-64` now carries control-table rows for `/query`, `/index/build`, and `/index/status`, explicitly citing "issue #1201" as the reason for the unconditional attach — resolving H3. `docs/plans/remaining_work.md` (the live checklist) no longer lists #1201 among its five open GitHub issues, consistent with closure.
 >
 > **What's left:**
 > - Nothing outstanding — fully implemented; see `gate.py:1328-1351` and `docs/THREAT_MODEL.md:62-68`. This doc is now a historical record and is a candidate for deletion.
-
-# Console Review Bundle — Reconciliation and Implementation Plan
 
 **Date:** 2026-08-28
 **Baseline:** `main` @ `8a534ab`
