@@ -6,7 +6,7 @@
 # agent can do: reading code for optimization opportunities and authoring PRs.
 #
 # What it does:
-#   1. Pins the git identity the stop hook requires.
+#   1. Pins the git identity the session-runtime stop hook requires (not wired in repo settings.json).
 #   2. Ensures `main` is fetched and that we are on a fresh working branch cut
 #      from origin/main (creates one if missing; never force-resets an existing
 #      branch that already has work).
