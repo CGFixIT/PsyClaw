@@ -86,9 +86,10 @@ def _shutdown_inflight_sockets(client: httpx.Client) -> None:
             sock.shutdown(socket.SHUT_RDWR)
         # Yank the fd so Darwin's blocked recv() returns. detach() first so
         # later sock.close() / GC cannot close a recycled fd.
-        fd = -1
-        with suppress(OSError, AttributeError):
+        try:
             fd = sock.fileno()
+        except (OSError, AttributeError, TypeError):
+            fd = -1
         detach = getattr(sock, "detach", None)
         if callable(detach):
             with suppress(OSError, AttributeError):
