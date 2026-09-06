@@ -139,10 +139,13 @@ expire it.
   deps live in 3.11's `dist-packages`; on 2026-09-06 `import torch` failed for
   3.10, 3.11, 3.12 and 3.13 alike. Treat the venv step as mandatory every
   session; the container is rebuilt from a generic image, not from this repo.
-- **`pkill -f "python gate.py"` kills your own shell.** The pattern matches the
-  `bash -c` wrapper that is running the command (exit code 144 observed). The
-  driver uses a pidfile for exactly this reason. If you must, match on the
-  pid from `pgrep -f "^/root/.venv.*gate.py"` or use `fuser -k 8787/tcp`.
+- **`pkill -f "python gate.py"` kills your own shell, and `pgrep -f gate.py`
+  reports it as still running.** Both match the `bash -c` wrapper that is
+  executing the command (exit 144 from `pkill`; a phantom "server still
+  running" from `pgrep`, both observed 2026-09-06). The driver uses a pidfile
+  for exactly this reason. To check liveness, hit the port:
+  `curl -s --max-time 2 http://127.0.0.1:8787/health` (000 / connection
+  refused means down). To kill without a pidfile, `fuser -k 8787/tcp`.
 - **`uv pip install --dry-run --system` fails on this image** with the
   "externally managed" refusal before resolving anything. Not a finding about
   the Dockerfile; run the dry-run inside a venv or report it unverified.
@@ -275,7 +278,7 @@ expire it.
 | `OSError: libcudart.so.13: cannot open shared object file` on `import torch` | plain torch installed with `--no-deps` | reinstall without `--no-deps`; the CUDA libs are required at import on Linux |
 | pytest prints dots and `[100%]` but no `N passed` line | `-q` doubled with `addopts` → `-qq` | use `driver.sh test` or `-o addopts=""`; read the exit code |
 | `ModuleNotFoundError: pytest` / `torch` under `python3` | `python3` is 3.11 with nothing installed | use `/root/.venv-cyclaw-312/bin/python -m pytest` |
-| shell exits 144 right after `pkill -f "python gate.py"` | pattern matched the invoking shell | `driver.sh stop` (pidfile) |
+| shell exits 144 after `pkill -f "python gate.py"`, or `pgrep -f gate.py` says a stopped server is running | both patterns match the invoking `bash -c` shell | `driver.sh stop` (pidfile); check liveness with `curl` on the port |
 | `POST /query` → `503 INDEX_NOT_FOUND` after a successful serve | no index; model host denied | expected here; test retrieval via the unit suite, not the live route |
 | `uv pip install --dry-run --system ...` → "externally managed" | system interpreter refuses | run inside a venv, or report unverified |
 | `discover-skills` job: `unclassified skill '<name>'` | new `verify.sh` without a profile arm in `ci.yml` | add the skill to the `stdlib` (or `yaml`/`heavy`) case |
