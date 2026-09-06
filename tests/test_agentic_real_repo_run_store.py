@@ -102,6 +102,15 @@ def test_load_raises_for_a_corrupt_record(tmp_path: Path):
         load_run(runs_dir, run_id)
 
 
+def test_load_raises_for_a_non_utf8_record(tmp_path: Path):
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True)
+    run_id = new_run_id()
+    (runs_dir / f"{run_id}.json").write_bytes(b"\xff\xfe not utf-8")
+    with pytest.raises(AgenticError, match="unreadable or corrupt"):
+        load_run(runs_dir, run_id)
+
+
 @pytest.mark.parametrize(
     "payload",
     [

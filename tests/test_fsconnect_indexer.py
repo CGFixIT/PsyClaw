@@ -298,6 +298,18 @@ def test_incremental_cache_self_prunes_deleted_file(env):
     assert "a.md" in cache
 
 
+def test_incremental_binary_skip_cache_is_treated_as_empty(env):
+    _c, _f, _cp, idx, tmp = env
+    cfg, fs_cfg, cp = _incremental_env(idx, tmp)
+    staging = tmp / "staging_bin_cache"
+    staging.mkdir(parents=True)
+    (staging / ".fsindex_cache.json").write_bytes(b"\xff\xfe not utf-8")
+    indexer = FsIndexer(cfg, fs_cfg, config_path=cp)
+    assert indexer._load_cache(staging) == {}
+    res = indexer.apply(staging_dir=str(staging), reindex=False)
+    assert res["staged"] == 2 and res["unchanged"] == 0
+
+
 def test_non_incremental_restages_every_run(env):
     # Default mode (index_incremental absent -> False) is unchanged in what it
     # STAGES: every run re-stages all eligible files and never skips via the
