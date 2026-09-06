@@ -127,6 +127,8 @@ echo "[cyclaw] Ctrl+C stops all started servers"
 # ponytail: one copy here (shim + cyclaw() + direct script all exec this).
 _dotenv_mode() {
   if [ "$(uname -s)" = "Darwin" ]; then
+    # Pin BSD stat: a GNU stat earlier on PATH interprets -f differently,
+    # so valid private dotenv files could fail the permission check.
     /usr/bin/stat -f %Lp "$1" 2>/dev/null || true
   else
     stat -c %a "$1" 2>/dev/null || true
@@ -148,12 +150,16 @@ _source_dotenv() {
       return 1
       ;;
   esac
+  # Preserve source failure across export-state cleanup so the caller can
+  # try the repo dotenv when loading the preferred file fails.
   # shellcheck disable=SC1090
   local source_status=0
   local had_allexport=0
   case "$-" in *a*) had_allexport=1 ;; esac
   set -a
   . "$f" || source_status=$?
+  # Restore the caller's export policy; an unconditional set +a would disable
+  # a setting that may have been enabled before this helper was called.
   if [ "$had_allexport" -eq 0 ]; then
     set +a
   fi
