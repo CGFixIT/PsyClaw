@@ -515,6 +515,22 @@ def test_default_chat_client_uses_27b_timeout_when_config_key_is_absent(monkeypa
         chat.close()
 
 
+def test_canonical_backend_key_non_numeric_port_is_unparseable():
+    """urlparse succeeds on ':notaport'; .port raises ValueError.
+
+    That used to escape _canonical_backend_key and 500 /api/agent/run.
+    """
+    assert harness_server._canonical_backend_key("http://127.0.0.1:notaport/v1") is None
+
+
+def test_canonical_backend_key_implicit_and_explicit_default_port_match():
+    """http://127.0.0.1/v1 and :80 name the same socket, so the keys match."""
+    implicit = harness_server._canonical_backend_key("http://127.0.0.1/v1")
+    explicit = harness_server._canonical_backend_key("http://127.0.0.1:80/v1")
+    assert implicit is not None
+    assert implicit == explicit
+
+
 # -- HTTP API -----------------------------------------------------------------------
 
 def test_status_endpoint(client, cfg):

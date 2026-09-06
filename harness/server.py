@@ -421,13 +421,16 @@ def _canonical_backend_key(url: str) -> tuple[str, str, int | None, str] | None:
     """
     try:
         parsed = urlparse(url)
+        # urlparse itself succeeds on a non-numeric port ("http://127.0.0.1:notaport/v1");
+        # accessing .port is what raises. Keep it inside this try so the caller
+        # (_agent_run_shares_chat_backend) sees None instead of a 500.
+        port = parsed.port
     except ValueError:
         return None
     scheme = parsed.scheme.lower()
     host = (parsed.hostname or "").lower()
     if host in _LOOPBACK_HOSTS:
         host = "127.0.0.1"
-    port = parsed.port
     if port is None:
         port = _SCHEME_DEFAULT_PORTS.get(scheme)
     return (scheme, host, port, parsed.path.rstrip("/"))
