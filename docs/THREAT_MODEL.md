@@ -18,10 +18,12 @@ consolidates the threat-model assumptions previously scattered across
 `CLAUDE.md`, `.claude/rules/PROJECT_RULES.md`, `.github/SECURITY.md`,
 `config.yaml`, and code comments.
 
-> 💡 **One-line stance:** CyClaw is a **single-operator, loopback-bound, local
-> RAG server**. Its layered controls are strong *for that deployment*. It is
-> **not** a multi-tenant platform for executing untrusted code, and does not
-> claim microVM/hypervisor-grade isolation.
+> 💡 **One-line stance:** CyClaw is a **trusted-operator, loopback-bound, local
+> RAG server** — one operator by default, a small set of mutually trusted
+> operators with their own accounts and roles once `auth.enabled` is on (see
+> the fifteenth amendment in §5). Its layered controls are strong *for that
+> deployment*. It is **not** a multi-tenant platform for executing untrusted
+> code, and does not claim microVM/hypervisor-grade isolation.
 
 ---
 
@@ -30,8 +32,8 @@ consolidates the threat-model assumptions previously scattered across
 | Assumption | Value |
 |---|---|
 | Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. **Enforced at runtime since 2026-08-08:** `gate.py`'s `main()` refuses to serve on a non-loopback `api.host` via **two** documented exceptions, both of which a deployment review must check: `CYCLAW_ALLOW_NON_LOOPBACK_BIND` being set, **or** `auth.enabled` + `api.tls.enabled` both literally `true` **and** `/query` demonstrably enforcing a credential (that third condition is probed at runtime, and is false until Stage 3 has attached `require_session_or_token` to `/query`, which happens only when `auth.enabled` is the literal boolean true). See the ninth amendment in §5 for why this was previously a convention rather than a control, and for what the second path does and does not prove. |
-| Operators | **Single trusted operator** (or a small trusted home-lab/LAN). |
-| Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
+| Operators | **One trusted operator by default; a small set of mutually trusted operators when `auth.enabled` is on.** Each gets a distinct account with an `admin` / `operator` / `audit` role (eleventh amendment). Accounts distinguish *who did what* and *who may administer*; they do not make an operator untrusted. See the fifteenth amendment in §5. |
+| Tenancy | **Single-tenant.** Every authenticated operator, any role, reaches the same corpus, the same soul, and the same local model. No mutual isolation between users is attempted — multi-operator is not multi-tenant. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
 | LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider). **Since 2026-08-07 the shipped `config.yaml` satisfies two of those three gates** — `app.mode: "hybrid"` and both `models.grok.enabled` / `models.claude.enabled` are `true`. The third, `user_confirmed_online`, is per-request and cannot be pre-set by config. See the eighth amendment in §5. |
 | Outbound model egress | **Three planes.** Core and agentic are not fully off by default; see the eighth amendment in §5. Core plane: two of its three gates ship satisfied (`app.mode: "hybrid"`, both providers `enabled: true`); only the per-request `user_confirmed_online` still stands. Agentic plane: `allow_cloud_providers` and both `providers.<name>.enabled` ship `true`; `agentic.enabled`, `deepagent_github.enabled`, the API-key env var, and `--confirm-online` still stand. Evaluation plane: `tests/judge_eval.py` is a standalone, default-off forensic tool requiring `CYCLAW_EVAL_LIVE=1` and `ANTHROPIC_API_KEY`; it is never imported by a production or live-request path. The core graph's triple-gated fallback is `mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`. The out-of-band Deep Agents harness has a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. External destinations remain `api.x.ai` and `api.anthropic.com`; the evaluation plane permits only `api.anthropic.com`. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` to record agentic egress as a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text. **The agentic chain has two consumers with different egress-recording states (see §5's fifth amendment):** `agentic/cli.py`'s `real-repo-run --provider`, wired to `agentic.deepagent_github.chat_client.ChatModelProposerClient`, calls `sanitize_handoff` on every real invocation. The separate, still-unwired `builder.py`/DeepAgents-graph path (`deepagent-plan`, probe-only) passes its cloud `BaseChatModel` straight to `creator(model=model, ...)` without `sanitize_handoff`; that path's egress is not recorded and remains out-of-scope follow-on work. |
@@ -40,8 +42,9 @@ consolidates the threat-model assumptions previously scattered across
 
 If you deploy outside these assumptions (internet-facing, multi-tenant, running
 untrusted third-party skills), **re-evaluate** — several controls below are scoped
-to the single-operator model and are not sufficient on their own for hostile
-multi-tenant workloads.
+to the trusted-operator model and are not sufficient on their own for hostile
+multi-tenant workloads. "Several trusted operators" is inside the model;
+"operators who must be protected from each other" is not.
 
 ---
 
@@ -1036,6 +1039,60 @@ deployment. Containers should set `CYCLAW_API_KEY`.
 `api.host`. It deliberately does **not** consider `security.allowed_hosts`:
 that list filters `Host` headers and opens no listening socket, so LAN names
 there do not make a loopback-bound server reachable.
+
+### Fifteenth amendment — scope widens from single-operator to trusted-operator, single-tenant (2026-09-06)
+
+The one-line stance in this document read "single-operator" from its first
+revision until 2026-09-06. That was accurate while the only identity the
+server knew was "whoever holds `CYCLAW_API_KEY`". It stopped being the whole
+picture when Stages 2–6 of
+[`docs/AUTHENTICATION_DESIGN.md`](./AUTHENTICATION_DESIGN.md) landed: the code
+now carries per-user accounts (`gate_auth.py`, `utils/authn_*.py`), session
+cookies plus CSRF for browsers and bearer device tokens for programs, a
+scrypt password store with per-account lockout, three enforced roles, and
+last-admin protection. The owner's 2026-09-04 README edit ("potential
+multi-operator support") named that intent; this amendment makes the threat
+model say the same thing, and says precisely what it does *not* mean.
+
+- **What changes.** §1's Operators row now reads "one trusted operator by
+  default; a small set of mutually trusted operators when `auth.enabled` is
+  on". Multi-operator is an *identity and administration* feature: distinct
+  accounts, distinct roles, an audit trail that names the actor, and an
+  `admin` who can create, disable, reset, and delete the others. Every
+  control in §2–§4 that was argued "for the single-operator model" holds
+  for this deployment too, because the trust assumption it rested on —
+  everyone holding a credential is trusted — is unchanged.
+- **What does not change.** Tenancy is still single-tenant, exactly as the
+  eleventh amendment already stated: any authenticated operator, any role,
+  reaches the same corpus, the same soul, and the same local model. There
+  is one index, one `soul.md`, one spend ledger. No control attempts to
+  isolate one operator's queries, documents, or soul edits from another's.
+  The sanitizer, the triple gate, soul governance, and audit convergence
+  are per-request controls, not per-tenant ones. An operator who must be
+  protected *from* another operator is outside this model and the
+  re-evaluate note under §1 applies.
+- **Shipped posture.** `auth.enabled` still ships `false`. With auth off the
+  server has exactly one identity and behaves as the single-operator server
+  every earlier section describes; nothing in the default configuration is
+  changed by this amendment. Turning auth on is what makes "operators"
+  plural, and only then do the eleventh amendment's role checks (including
+  the `audit` role's `403 AUTH_ROLE_DENIED` on `/query`) engage.
+- **Network scope is unchanged.** Multi-operator does not mean LAN or WAN by
+  itself. Host exposure remains loopback-only under the ninth amendment's
+  bind guard; the two documented exceptions (`CYCLAW_ALLOW_NON_LOOPBACK_BIND`,
+  or `auth.enabled` + `api.tls.enabled` both `true` with `/query` demonstrably
+  credentialed) are the only routes past `127.0.0.1`, and a LAN or WAN
+  deployment still starts from the second one. The root README's Installation
+  scope line ("loopback-bound local / optionally LAN or WAN") is a pointer to
+  that second exception, not a loosening of it.
+- **What a reviewer should now ask.** Where an earlier section says
+  "accepted under the single-operator model" — for example
+  `config.yaml`'s `security` block comments and `INVARIANTS.md`'s scan-gap
+  note — read it as "accepted because every credential holder is trusted".
+  If a future change lets an untrusted party hold a credential (self-service
+  signup, a public device-token issuer, an internet-facing bind), that
+  acceptance no longer follows and the affected control must be re-argued,
+  the same way the eighth amendment re-argued the external-provider gates.
 
 ## 7. Reporting
 

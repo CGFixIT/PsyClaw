@@ -412,7 +412,8 @@ e.g. `IP:10.0.0.5` or `DNS:box.local`), and `--force` — **required to
 overwrite an existing cert/key pair**; without it the command refuses rather
 than clobbering one. Read
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before exposing the port —
-CyClaw's stated scope is single-operator and loopback-bound.
+CyClaw's stated scope is trusted-operator (single by default, a small trusted
+group behind `auth.enabled`), loopback-bound, and single-tenant.
 
 ## Installation
 
@@ -1350,7 +1351,7 @@ are in [`macos/README.md`](macos/README.md) and
 
 > **Docker / GHCR:** published runtime image `ghcr.io/cgfixit/cyclaw` (tag-triggered). Operator guide, pull/run commands, Falco opt-in notes, and explicit non-goals (no microVM): [`docs/DOCKER.md`](docs/DOCKER.md). Host publish remains `127.0.0.1` only.
 
-> **Scope:** CyClaw is a multi-operator, loopback-bound local/optionally lan or wan server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The underlying design philosophy (telemetry kill, offline-first posture) lives in [`docs/security-philosophy/`](docs/security-philosophy/).
+> **Scope:** CyClaw is a trusted-operator, loopback-bound local server — one operator by default, a small set of mutually trusted operators with their own accounts and roles once `auth.enabled` is on, and single-tenant either way (everyone reaches the same corpus, soul, and model). LAN or WAN exposure is possible only through the threat model's documented bind exceptions (auth + TLS), never by default. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The underlying design philosophy (telemetry kill, offline-first posture) lives in [`docs/security-philosophy/`](docs/security-philosophy/).
 
 ---
 
