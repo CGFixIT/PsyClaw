@@ -1,5 +1,10 @@
 # macOS Integration Gaps — Verification + LaunchdScheduler Plan
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE. All five "Next integrations" items this doc lists as shipped in PRs #909-#912 are confirmed present on current `main`: `sync/scheduler.py` has a real `LaunchdScheduler` class (line 510) gated on `sync.scheduler_backend`/`schedule_frequency`; `utils/launchd_plist.py`, `macos/cyclaw-keychain-env.sh`, `macos/cyclaw-keychain-set.sh`, and `macos/generate_service_plist.py` (gate.py/harness supervised LaunchAgent, KeepAlive on crash only) all exist. Nothing here is auto-loaded — every artifact still only *generates* a plist and requires an explicit operator `launchctl bootstrap`, matching the doc's own non-goal.
+>
+> **What's left:**
+> - Nothing outstanding from this doc's own scope — see `sync/scheduler.py`, `utils/launchd_plist.py`, `macos/generate_service_plist.py`, `macos/cyclaw-keychain-*.sh`. This doc is now a historical record and is a candidate for deletion (or folding into `docs/HARNESS_MACOS.md`).
+
 **Date:** 2026-08-14
 **Verified against:** `origin/main` @ `8e7b540a01550a7a238af45fefd7a01ea65bf590`
 **Status:** Verification complete; `LaunchdScheduler` implemented and tested

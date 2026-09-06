@@ -1,5 +1,18 @@
 # NeMo Guardrails — current-state matrix
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE.
+> This file's own claims still verify live: `guardrails/broker.py`,
+> `guardrails/tool_broker.py`, `guardrails/call_inventory.py`,
+> `guardrails/qwen_registry.py` all exist; `guardrails.enabled: false` remains
+> the shipped default (`config.yaml:1043`). One drift found elsewhere: Numbat
+> issue #1128 Slice A (hook-verdict emission) shipped 2026-08-27 in the same
+> commit range as this file's last edit but is not cross-referenced here —
+> see `docs/plans/NUMBAT_AND_ALWAYS_ON_ROADMAP.md`'s own status stamp.
+>
+> **What's left:**
+> - Re-run this matrix after any future guardrails PR; no outstanding gap
+>   found in this pass. Not a delete candidate — it is the live reference doc.
+
 **As-of 2026-08-27**, verified against `origin/main` **`d9b0f8cd`**. This file is
 the canonical description of what the live tree *does*. Historical phase
 plans below are **superseded for status**; they remain valid as decision logs.

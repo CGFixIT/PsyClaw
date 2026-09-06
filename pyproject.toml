@@ -190,7 +190,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram", "opentweet", "memory"]
+source = ["gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram", "opentweet", "memory", "schemas"]
 omit = ["tests/*", "*/test_*", "*/__pycache__/*", "agentic/fsconnect/*", "agentic/sqlconnect/*", "agentic/netconnect/*", "agentic/vendor/*"]
 
 [tool.coverage.report]

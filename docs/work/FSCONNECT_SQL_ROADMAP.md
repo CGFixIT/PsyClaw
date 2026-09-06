@@ -1,5 +1,12 @@
 # CyClaw Connectors — Staged Roadmap (`fsconnect` / `sqlconnect` and beyond)
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL. FS Phase 2 (write-enablement) is fully shipped as the doc's own 2026-08-02 correction says. Verified still-open items: no hash-chain audit anywhere in `utils/logger.py` (grep clean), no `tesseract`/`pytesseract` OCR integration, quarantine is still advisory-only (`agentic/fsconnect/indexer.py:14` says "roadmap: quarantine"), Windows writes remain hard-refused (`agentic/fsconnect/pathsafe.py` — `_windows_writes_refused`), SQL NL→SQL/more-dialects are unbuilt (`agentic/sqlconnect/` has no such code), and MSSQL EXPLAIN is still explicitly refused (`agentic/sqlconnect/client.py:654-656`). `agentic/netconnect/` now exists (passive LAN inventory, disabled by default) as a different connector than the "OS-level inventory"/`osconnect` item sketched here — no `agentic/osconnect/` package exists.
+>
+> **What's left:**
+> - Hash-chain/tamper-evident audit (still the RFP-disqualifier gap named in this doc)
+> - FS Phase 3 (OCR, real quarantine, incremental reindex) and FS Phase 4 Windows write authority
+> - SQL Phase 2 (NL→SQL, more dialects, MSSQL EXPLAIN) and the terminal.html "Open file share" endpoint (still unbuilt)
+
 > Status: **v0.1 shipped** — `agentic/fsconnect/` (scoped reads + gated, confined
 > writes + toggleable corpus indexing) and `agentic/sqlconnect/` (read-only SQL
 > scaffold, disabled). Both are out-of-band, opt-in, and disabled by default. This

@@ -1,5 +1,10 @@
 # Remaining Work (STALE — 2026-08-02)
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED by `docs/plans/remaining_work.md`, exactly as this file's own header already says. Confirmed still true today: `docs/plans/remaining_work.md` (dated 2026-09-02, verified against `origin/main` `8baea94f`) explicitly names this file as the historical refutation/containment-rationale record and instructs readers not to treat its old statuses as current. Nearly every item here is already marked DONE/CLOSED/RESOLVED/REFUTED in its own text; the one item still open at this file's own date (PR #753 review) is not tracked further here or in the live list, implying it landed. Deliberately retained per `docs/plans/remaining_work.md`'s own stated reason — its contemporaneous refutation reasoning (e.g. why item #3 was refuted, why fsconnect's injection scanner was already enforcing) is not duplicated elsewhere.
+>
+> **What's left:**
+> - Nothing outstanding as an action item — this file is pure history now. Do not delete it: `docs/plans/remaining_work.md` cites it by name and depends on its refutation rationale staying available.
+
 > **Not the live list.** Current checklist:
 > [`remaining_work.md`](../plans/remaining_work.md). Keep this file as the
 > closed-item / refutation log from 2026-08-02 (`9282359`).

@@ -1,5 +1,10 @@
 # Numbat 0.2.0 CLI as CyClaw’s secondary evaluator
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE — this is a reference/explainer doc, not a plan, and it still matches the running code. Verified: `config.yaml`'s `numbat:` block (`:628-648`) ships `enabled: true`, `source_agent: "unknown"`, and the CEL monitor at `numbat.cel.enabled: false`; `utils/numbat_emitter.py` writes `SCHEMA_VERSION = "0.3.0"` (`:55`) and defaults `source_agent` to `"unknown"` (`:270-272`), matching the doc's wire-contract claims exactly.
+>
+> **What's left:**
+> - Nothing outstanding — this doc accurately describes the shipped Numbat integration today; see `config.yaml:628-648` and `utils/numbat_emitter.py`. Not a candidate for deletion (it is a live reference doc, not a completed plan) — re-check it only if the Numbat CLI/schema version or the emitter's producer planes change.
+
 **Audience:** operators and reviewers who need to know what Numbat is *for* in this repo, not how to reimplement it.
 
 **Code and `config.yaml` win.** This note explains the Numbat **0.2.0 CLI** CyClaw’s fixture job actually runs. That CLI evaluates **schema 0.3.0**. The emitter (`utils/numbat_emitter.py`) writes the same wire version (`schema_version: "0.3.0"`, `source_agent: "unknown"`). Release version and schema version are independent in upstream Numbat.

@@ -11,6 +11,11 @@ FILED AS: https://github.com/cgfixit/CyClaw/issues/1201
 
 # Gate hardening: `/query`'s cross-site check is conditional on `auth.enabled`; `/index/status` limiter posture; THREAT_MODEL control rows
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE. This issue (filed as #1201) is fully resolved. H1: `gate.py:1351` now attaches `_reject_cross_site_query` to `/query` unconditionally, outside the `if auth_manager is not None:` branch at `:1328` — `tests/test_gate_query_auth.py` now has a `TestQueryCrossSiteRejectedWithAuthOff` class (`:87`) covering exactly the previously-untested shipped default. H2: `docs/THREAT_MODEL.md:64,68` documents `GET /index/status` as deliberately exempt from the rate limiter (the "exempt" branch was chosen, not the `INDEX_POLL_MS` raise). H3: `docs/THREAT_MODEL.md:62-64` adds control rows for `/query`, `/index/build`, and `/index/status`, citing issue #1201 by number. The two "Closed on verification" items were already correct when this issue was filed and remain so.
+>
+> **What's left:**
+> - Nothing outstanding — fully implemented; see `gate.py:1328-1351`, `docs/THREAT_MODEL.md:62-68`, and `tests/test_gate_query_auth.py:87`. This doc is now a historical record (the filed-and-closed issue text) and is a candidate for deletion.
+
 **Labels:** `security` `docs` `console`
 
 ---

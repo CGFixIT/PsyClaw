@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
+from .endpoint_trust import EndpointTrustError, assert_local_destination
 from .errors import HealthStatus
 
 _cfg_cache: dict[str, tuple[dict, float]] = {}
@@ -181,6 +182,12 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     try:
         from llm.client import resolve_local_backend
 
+        # Trust the configured primary URL before resolve_local_backend.
+        # When fallback.enabled, that resolver probes primary first; /health
+        # must not discover an untrusted host (and must not send its API key).
+        primary_url = str(llm_cfg.get("base_url") or "").strip()
+        if primary_url:
+            assert_local_destination(primary_url, llm_cfg.get("trusted_hosts", []))
         resolved = resolve_local_backend(llm_cfg)
         llm_base = resolved.base_url
         local_model = resolved.model or ""
@@ -188,6 +195,14 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         local_headers = (
             {"Authorization": f"Bearer {resolved.api_key}"} if resolved.api_key else None
         )
+    except EndpointTrustError as exc:
+        results.append(HealthStatus(
+            name="local_llm", healthy=False, error=_safe_error(exc),
+        ))
+        llm_base = None
+        local_model = ""
+        local_name = "local_llm"
+        local_headers = None
     except Exception as exc:
         # Resolver validation (e.g. fallback enabled without model) should not
         # 500 the whole /health payload — surface as unhealthy local status.
@@ -199,13 +214,22 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         local_headers = None
 
     if llm_base is not None:
-        results.append(_ping(
-            f"{llm_base.rstrip('/')}/models",
-            local_name,
-            headers=local_headers,
-            expect_model=local_model if local_model else None,
-            timeout=_health_probe_timeout(llm_base),
-        ))
+        # Same destination allowlist as graph.py generate: /health is
+        # unauthenticated, so a mis-set primary URL must not become a probe.
+        try:
+            assert_local_destination(llm_base, llm_cfg.get("trusted_hosts", []))
+        except EndpointTrustError as exc:
+            results.append(HealthStatus(
+                name=local_name, healthy=False, error=_safe_error(exc),
+            ))
+        else:
+            results.append(_ping(
+                f"{llm_base.rstrip('/')}/models",
+                local_name,
+                headers=local_headers,
+                expect_model=local_model if local_model else None,
+                timeout=_health_probe_timeout(llm_base),
+            ))
     if (probe_external and cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled") is True):
         grok_base = cfg["models"]["grok"]["base_url"]

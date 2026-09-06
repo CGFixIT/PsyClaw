@@ -1,4 +1,11 @@
 # Not now def later once ive done more of the stuff im supposed to update this and see if it holds up to scrutiny theres so many of these docs randomly (note: create a local claude side save or hook or pre commit scan/check to have it story ik local .claude or memory with an automation weekly to store on a computrr 
+
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL. The one repo-backed fact this doc leans on is still true: `GET /audit/summary` exists in `gate.py`'s route table (API-key-gated, aggregates only, no raw queries — confirmed against `CLAUDE.md`'s route table). Everything else in this doc (retention/erasure tooling, matter/client tagging, conflict-wall checks) is explicitly labeled "hypothesis" by the doc itself and none of it exists in code — no purge/retention endpoint, no matter-tagging, no conflict-wall check anywhere in `gate.py`/`gate_ops.py`/`gate_memory.py`. The doc's own "net-new product features frozen" business-status note (2026-07-03) has not been verified as still current.
+>
+> **What's left:**
+> - Confirm whether the 2026-07-03 "feature freeze pending buyer discovery" business status still holds, and update or remove that line if it doesn't.
+> - Nothing to build from this doc absent a paid pilot/discovery trigger, per the doc's own "Guiding principle" — it is speculative-by-design and should stay that way until a build trigger fires.
+
 # i dunno but telhere is something that can be done since theyre just not things you put here but i need to somehow read and organize them - worst case just write a script or sonething in ckaude that glues os and an event in claude that i could make trigger something
 # (that might be something cuz that surprisingly haopens a lot ive hesrd a lot of people say 
 # anyways im done typing here hopefully i know what i was thinking there later 

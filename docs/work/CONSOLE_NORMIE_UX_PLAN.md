@@ -1,7 +1,19 @@
 # CyClaw console: "good for a dentist" — implementation plan
 
+> **Status update — 2026-09-06 (implementation recheck):** MOSTLY COMPLETE. All
+> four PRs in this plan's own status log (§4) are shipped and verified live on
+> `main`: the advanced-mode toggle exists (`static/terminal.html:959-960`
+> `#advancedTools`/`Advanced ▸`), `POST /index/build` + `GET /index/status`
+> exist in `gate.py` (lines 913, 969), and `QueryResponse.llm_model`
+> (`schemas/api.py:57`) carries the resolved model tag additively alongside
+> the untouched `model_used` role vocabulary. Error-copy and privacy-lede work
+> described in PR 1/3 is in `terminal.js`/`terminal.html` as claimed.
+>
+> Four smaller UX gaps remain. They were reverified against current code and
+> are listed below; implementation details are tracked in GitHub issue #1331.
+
 Original planning base: `origin/main` @ `730b979` (#1074 merged).
-Status rechecked against `origin/main` @ `f151a84` on 2026-09-06.
+Status rechecked against `origin/main` @ `9bf7347` on 2026-09-06.
 Discipline: `/karpathy-guidelines` + `/ponytail` — surgical diffs, no speculative
 generality, every claim below verified against source (file:line) not recalled.
 

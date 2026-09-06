@@ -1,5 +1,13 @@
 # Windows PowerShell setup and key-lifecycle issues
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL, and drifted since the doc's own `7d2ab716` baseline. The P0 item ("installer still silently destroys a stale repo dir") is now actually DONE: commit `6fd4b9fd` (same day, 2026-08-27, but after this doc's cited baseline) added the `-ReplaceRepo` switch — verified live in `powershell/Install-CyClaw.ps1:36-107` (throws by default, requires the flag to `Remove-Item -Recurse`). Every other row is still exactly as documented: `Uninstall-CyClaw.ps1` has zero CredMan-related code (no `-RemoveCredMan`, no `CredDelete`), `Invoke-CyClaw.ps1` has no gate/CredRead integration, `Setup-CyClaw-Keys.ps1` does not exist, and `CyClaw-CredMan-Env.ps1` has no win32-1168 error-code mapping.
+>
+> **What's left:**
+> - `-RemoveCredMan` + `CredDeleteW` on `Uninstall-CyClaw.ps1` (P0, still open).
+> - CredRead win32 error-taxonomy mapping in `CyClaw-CredMan-Env.ps1` (P2).
+> - Installer call to `Setup-FsConnect.ps1 -PrepareOnly` (P2); then `Setup-CyClaw-Keys.ps1` as a new script (P1, only after the above land).
+> - Update this doc's implementation-status table to mark the `-ReplaceRepo` row as shipped rather than planned.
+
 Status: open follow-up. Revalidated against `origin/main` at `7d2ab716` after
 #1114 merged on 2026-08-27, plus #1115's branch diff.
 Planning only for the remaining items. No I1-I6 / topology / write-posture change.

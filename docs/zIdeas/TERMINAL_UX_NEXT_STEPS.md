@@ -1,5 +1,11 @@
 # Terminal UX Next Steps
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL. The doc's own "Current Patch" banner (2026-07-19) already confirms the CSS-token/`AbortController`/Firefox-scrollbar/reduced-motion work landed in `static/terminal.html` — spot-checked: `static/terminal.js` still uses `AbortController` (not the removed `AbortSignal.timeout()`), and `static/terminal.html` defines `scrollbar-width`/`scrollbar-color` and `prefers-reduced-motion` rules. The "Next Web Interface Pass" section (cross-browser visual QA, keyboard-traversal checks, screenshot capture) is manual UX work with no automated test to verify against, and nothing in `tests/test_terminal_contract.py` (which only checks the route/POST-path contract) covers it — so it remains an open, unverified backlog exactly as the doc's own banner says.
+>
+> **What's left:**
+> - Run the manual cross-browser visual-smoke pass (§"Next Web Interface Pass" items 1-2: Chrome/Edge/Firefox/Brave, desktop/tablet/phone widths).
+> - Do the keyboard-traversal QA pass (item 5: toolbar traversal, Escape, Shift+Enter, confirmation focus trap) and check off the Acceptance Checklist items against real browsers.
+
 > **Status (2026-07-19):** the **Current Patch** list below has **landed** in `static/terminal.html` — verified: shared control tokens (`--control-height`, `--radius`, `--radius-pill`), wrapping ops toolbar (`flex-wrap`), `AbortController` request timeouts (`AbortSignal.timeout()` fully removed, abort timer cleared on every exit path), Firefox scrollbar styling (`scrollbar-width` / `scrollbar-color`), and `prefers-reduced-motion` handling — all with zero added dependencies. The **Next Web Interface Pass** items below remain an open *manual* visual-QA backlog (cross-browser screenshots, keyboard traversal checks).
 
 ## Current Patch

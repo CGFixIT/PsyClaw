@@ -1,5 +1,21 @@
 # macOS bash setup and key-lifecycle issues
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL — and
+> more complete than this doc currently states. Verified live: both P0 items
+> this doc marks "plan" are actually shipped — `_keychain_store_value`'s EXIT
+> trap (commit `850d3cde`, 2026-09-01) and the shim/`invoke-cyclaw.sh` dotenv
+> sourcing (P1; commits `2dc0264a`/`df43d9aa`/`8efa539e`, 2026-08-27, plus
+> `87410fba` 2026-09-06). Still genuinely outstanding: `uninstall-cyclaw.sh
+> --remove-keychain` (0 matches for "remove-keychain" in that script) and the
+> rotate-job-vs-live-gateway refusal (no `/health` check found near
+> `_schedule_rotate`).
+>
+> **What's left:**
+> - `macos/uninstall-cyclaw.sh --remove-keychain` for the five named services.
+> - Rotate job (`--schedule-rotate`) should refuse/warn if `/health` succeeds
+>   before minting a new `CYCLAW_API_KEY`.
+> - Update this doc's Implementation table — several "plan" rows are stale.
+
 Status: open follow-up. Revalidated against `origin/main` at `7d2ab716` after
 #1114 merged on 2026-08-27, plus #1115's branch diff.
 This file is planning only except where the Implementation table says otherwise. It does not change I1-I6, graph topology, or write posture.

@@ -1,5 +1,17 @@
 # Mailtag — Provider-Neutral Email Tagging: Implementation Plan
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** NOT_STARTED.
+> Confirmed no `mailtag/` package and no `gate_mailtag.py` exist anywhere in
+> the repo tree — this remains a design-only document exactly as its own
+> "Bottom line" table states, and §14's approval gate has not been crossed.
+> No `mailtag:` block exists in `config.yaml`.
+>
+> **What's left:**
+> - Everything in §12's PR shape (6 sequential PRs, scaffolding → Gmail →
+>   HTTP surface → Microsoft → iCloud → docs sync) — all of it, starting
+>   with explicit owner sign-off per §14, since this is a new capability
+>   under FEATURE FREEZE, not a fix.
+
 ## 0. Bottom line
 
 | | |
