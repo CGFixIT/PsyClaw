@@ -36,7 +36,8 @@ threading lock so concurrent calls cannot interleave a partial line.
 |---|---|
 | `timestamp` | UTC ISO-8601, set at write time |
 | `provider` | Lowercased provider tag (`grok`, `claude`); unparseable input becomes `unknown` |
-| `model` | The concrete model tag that billed, e.g. `grok-4.5` |
+| `model` | The configured model tag sent in the request, e.g. `grok-4.5` |
+| `served_model` | The vendor-resolved id echoed back in the response -- what actually served and billed; kept alongside `model` because an unpinned alias can be re-pointed upstream |
 | `input_tokens` / `output_tokens` | Prompt and visible completion counts |
 | `cached_input_tokens` | Grok prompt tokens served from cache |
 | `cache_creation_input_tokens` / `cache_read_input_tokens` | Claude cache write and read counts |

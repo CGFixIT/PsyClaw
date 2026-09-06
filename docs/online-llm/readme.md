@@ -105,7 +105,7 @@ stay local.
 
 When CyClaw cannot confidently answer from the vault, the terminal offers:
 
-- **No — Stay Offline** (labelled **Offline Best Effort** when no online
+- **No — Stay Offline** (labelled just **Stay Offline** when no online
   provider button is available): keep everything local and answer as well as
   possible.
 - **Send to Grok**: send the question to Grok if hybrid mode and Grok are enabled.
