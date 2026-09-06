@@ -320,7 +320,12 @@ def hash_changed_files(events: Sequence[FileEvent], local_root: str) -> list[Fil
     is untouched.
     """
     out: list[FileEvent] = []
-    root = os.path.abspath(local_root)
+    # realpath the ROOT too, not just each candidate below: on macOS /tmp and
+    # /var resolve to /private/..., so an abspath-only root never shares a
+    # prefix with a realpath'd candidate and every event silently skipped the
+    # hash (sha256 stayed None with no error). Same shape as
+    # agentic/fsconnect/osutil.py, which realpaths both sides.
+    root = os.path.realpath(local_root)
     root_norm = os.path.normcase(root)
     for ev in events:
         if ev.kind == "deleted":

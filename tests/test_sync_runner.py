@@ -285,6 +285,23 @@ def test_hash_changed_files_skips_symlink_escape(tmp_path):
     assert out[0].sha256 is None
 
 
+def test_hash_changed_files_hashes_under_symlinked_local_root(tmp_path):
+    """A local_root reached through a symlink (macOS /tmp -> /private/tmp) must
+    still hash its files; the root and candidate are both symlink-resolved."""
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    (real_root / "a.md").write_text("hello", encoding="utf-8")
+    link_root = tmp_path / "link"
+    try:
+        os.symlink(str(real_root), str(link_root), target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation not supported on this platform")
+
+    out = hash_changed_files([FileEvent(kind="added", path="a.md")], str(link_root))
+
+    assert out[0].sha256 is not None and len(out[0].sha256) == 64
+
+
 def test_reindex_exit_code_for_dry_run_is_zero_even_when_corpus_changed():
     """--dry-run previews changes; it must never signal a real reindex."""
     cfg = _make_cfg(Path("/tmp"), reindex_on_change=True)

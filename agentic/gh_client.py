@@ -342,9 +342,10 @@ def run_read(
     non-zero exit. Never raises with secret-bearing details.
 
     ``retries`` adds up to N extra attempts with exponential backoff (each sleep
-    capped at ``_MAX_BACKOFF_SEC``), but ONLY on a transient failure: a timeout,
-    or a non-zero exit whose stderr matches a network/server pattern (see
-    ``_is_transient_gh_error``). Deterministic
+    capped at ``_MAX_BACKOFF_SEC``), but ONLY on a transient failure: a timeout
+    (except for ``repo_clone``, whose partial ``dest`` makes a re-run fail
+    deterministically), or a non-zero exit whose stderr matches a
+    network/server pattern (see ``_is_transient_gh_error``). Deterministic
     failures (404, bad flag, auth) are never retried -- they fail fast.
     ``retries=0`` (the default) is exactly the historical single-shot behaviour.
     ``timeout`` defaults to 30s for every op except ``repo_clone``, whose only
@@ -375,7 +376,12 @@ def run_read(
             )
         except subprocess.TimeoutExpired as exc:
             audit_log({"event": "agentic_read_timeout", "op": op, "repo": repo, "attempt": attempt})
-            if attempt < attempts:
+            # repo_clone is the one op with filesystem side effects: a killed
+            # clone leaves a non-empty dest, so re-running the identical argv
+            # fails deterministically ("destination path already exists").
+            # Fail fast with the honest timeout error instead of burning the
+            # retry budget on attempts that cannot succeed.
+            if attempt < attempts and op != "repo_clone":
                 time.sleep(min(retry_backoff_sec * (2 ** (attempt - 1)), _MAX_BACKOFF_SEC))
                 continue
             raise AgenticError(

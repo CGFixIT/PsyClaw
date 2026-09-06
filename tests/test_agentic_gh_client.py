@@ -373,6 +373,20 @@ def test_run_read_repo_clone_retries_transient_then_succeeds():
     assert mrun.call_count == 2
 
 
+def test_run_read_repo_clone_does_not_retry_on_timeout():
+    # A killed clone leaves a non-empty dest, so a retry of the same argv fails
+    # deterministically -- the timeout must surface on the first attempt.
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run",
+                      side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=1)) as mrun, \
+         patch.object(gh_client.time, "sleep") as msleep:
+        with pytest.raises(AgenticError, match="timed out"):
+            run_read("repo_clone", "owner/repo", dest="/tmp/x/repo", retries=2, retry_backoff_sec=0)
+    assert mrun.call_count == 1
+    assert msleep.call_count == 0
+
+
 def test_run_read_repo_clone_audits_dest():
     with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
          patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
