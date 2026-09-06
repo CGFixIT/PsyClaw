@@ -377,7 +377,7 @@ ENV_FILE="$HOME_DIR/.env"
 # than turning a convenience flag into a credential-disclosure feature.
 _dotenv_mode() {
   if [ "$(uname -s)" = "Darwin" ]; then
-    stat -f %Lp "$1" 2>/dev/null || true
+    /usr/bin/stat -f %Lp "$1" 2>/dev/null || true
   else
     stat -c %a "$1" 2>/dev/null || true
   fi
@@ -399,9 +399,15 @@ _source_dotenv() {
       ;;
   esac
   # shellcheck disable=SC1090
+  local source_status=0
+  local had_allexport=0
+  case "$-" in *a*) had_allexport=1 ;; esac
   set -a
-  . "$f"
-  set +a
+  . "$f" || source_status=$?
+  if [ "$had_allexport" -eq 0 ]; then
+    set +a
+  fi
+  return "$source_status"
 }
 
 case "$-" in
