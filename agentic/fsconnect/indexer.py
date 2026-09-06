@@ -167,6 +167,8 @@ class FsIndexer:
         try:
             data = json.loads((staging / _CACHE_NAME).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            # Lost cache state forces fresh reads and leaves old staged files
+            # unpruned: without ownership records, deletion is no longer justified.
             return {}
         files = data.get("files") if isinstance(data, dict) else None
         return files if isinstance(files, dict) else {}

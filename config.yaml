@@ -1,31 +1,12 @@
-# ================================================================================
-# CyClaw Configuration — Single source of truth agentic/config.py/etc are fallback
-# ================================================================================
-#
-# PROMPT FILTER UPDATE (2026-06):
-# Expanded banned_patterns from 13 → 32 curated high-signal regex
-# (2026-07: tightened bare "urgent"/"act as"/"base64" to cut false positives;
-# 2026-07: injection-redteam closed 7 more coverage gaps, 32 → 39;
-# 2026-07: closed 1 more gap and tightened 2 of those 7 for false positives
-# found outside the redteam corpus's own benign probes, 39 → 40).
-# Categories: Core Override, Role Reassignment, System/New Instructions,
-# Memory/Persistence Manipulation (critical for RAG + soul poisoning defense),
-# Authority/Urgency, Tool/Action Hijacking, Light Obfuscation/Jailbreak.
-# Sources: Original + OWASP LLM01 + agent-security-super-skill red flags
-# + documented memory poisoning / indirect injection patterns.
-# All compiled with re.IGNORECASE. \s+ for whitespace tolerance (corpus-safe).
-# ================================================================================
+# CyClaw runtime configuration; subsystem loaders validate values and supply defaults.
+# Prompt-filter patterns live under policy.prompt_filter and are compiled by
+# utils/sanitizer.py with IGNORECASE | DOTALL.
 
 app:
   name: "cyclaw"
   env: "local"
   mode: "hybrid"  # "offline" | "hybrid"
-  # Decorative: no code reads app.debug (verified repo-wide grep, 2026-08-28 --
-  # cfg["app"] is only ever read for ["mode"]). It does NOT enable a debug
-  # mode, loosen auth, or change logging: log level is logging.level below.
-  # Annotated rather than deleted so an auditor reading `debug: true` is not
-  # left to conclude the shipped server runs with debug enabled -- same
-  # treatment security.require_env already gets further down this file.
+  # Does not configure FastAPI debug mode; utils/logger.py reads logging.level.
   debug: true
 
 models:
@@ -34,84 +15,30 @@ models:
     trusted_hosts: []  # Exact hostnames/IPs; loopback is always allowed.
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - Ollama loopback, offline-only
-    # Optional. Leave commented for a default (unauthenticated) Ollama server —
-    # no Authorization header is sent. Only set this if you have configured Ollama
-    # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
-    # doesn't parse a bare number as an int.
+    # Quote numeric-looking api_key values to preserve their text; llm/client.py
+    # omits Authorization when the selected backend has no key.
     model: "qwen3.8:27b-mlx"            # keep in sync with guardrails.model
-    # Disables the model's reasoning/thinking pass IN THE REQUEST, not in the
-    # response rendering. qwen3.8 is thinking-capable, and Ollama auto-enables
-    # thinking on such a model when no control is sent -- so omitting this key
-    # means thinking is ON. Accepted: none | low | medium | high | max; "none"
-    # is the only value that disables it. An invalid value fails at boot.
-    #
-    # This is the OpenAI-compatible spelling, sent on /v1/chat/completions.
-    # Ollama's NATIVE /api/chat and /api/generate use "think": false instead and
-    # do not understand "none" -- see scripts/measure_local_llm_throughput.py.
-    # Lowering max_tokens does NOT disable thinking; only this does.
-    #
-    # Sent only when the ACTIVE resolved backend is Ollama, so the LM Studio
-    # fallback below never receives it. Restart CyClaw after changing this;
-    # Ollama itself needs no restart (the control is per request). Requires an
-    # Ollama build that accepts "none" -- verify with the preflight curl in
-    # docs/! How-To-Guides/OLLAMA_SETUP.md before relying on it.
+    # llm/client.py sends this only for a resolved Ollama backend.
+    # utils/config_validation.py accepts none | low | medium | high | max;
+    # absent/empty omits the field, while an invalid value fails at boot.
+    # "none" requests thinking off; verify backend support via docs/! How-To-Guides/OLLAMA_SETUP.md.
     reasoning_effort: "none"
-    # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
-    # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
-    # length, Ollama stalls at "0% processing". The graph bounds the prompt
-    # INPUT to retrieval.max_context_tokens (query/soul-aware budget in
-    # graph.py local_llm_node / offline_best_effort_node), so the stall is
-    # prevented deterministically as long as:
-    #   Ollama context length  >=  max_context_tokens + max_tokens + ~1500 headroom
-    # RECOMMENDED Ollama context length (via num_ctx): 16384 (16k).
-    # With max_context_tokens=8000 + max_tokens=4096 the floor is
-    # 8000 + 4096 + ~1500 = 13,596 -> fits 16384 with ~2.8k tokens to spare.
-    # That nominal floor is NOT the binding constraint -- the character budget
-    # is. graph.py derives it as max_context_tokens * CHARS_PER_TOKEN (3), so
-    # 8000 -> 24,000 chars. What that costs in REAL tokens depends on the text:
-    #   ~3.2-3.6 chars/tok (technical English) -> ~7,000 tok  + 4,096 = ~11.1k
-    #   2.0 chars/tok (digests, base64, minified) -> 12,000 tok + 4,096 = 16,096
-    # The second line is the one to size against: it leaves only ~290 tokens
-    # under a 16,384 window, far less than the ~1500 the nominal formula above
-    # implies. It still fits, and symbol-dense text rarely fills the whole
-    # budget -- but treat 8000 as the ceiling for a 16k window, not a midpoint.
-    # Raising max_context_tokens further REQUIRES raising num_ctx to match.
+    # Output cap sent by LocalLLMClient. graph.py estimates input size using
+    # characters, not the model tokenizer; its minimum context allowance can
+    # push input beyond the estimate. Size the backend window for input plus output.
     max_tokens: 4096
     temperature: 0.2
-    # Hard per-attempt HTTP timeout, sized for the largest local model this repo
-    # is expected to host -- the shipped qwen3.8:27b-mlx default. A smaller tag
-    # simply leaves this budget unused.
-    # Decode speed is NOT a config value. Measure it on the operator machine:
-    #   python3 scripts/measure_local_llm_throughput.py
-    # Third-party M5 Pro 48 GB reports (not this checkout; 2026-08 Reddit /
-    # ollama --verbose): ~29-34 tok/s decode on the shipped 4-bit MLX tag
-    # (qwen3.8:27b-mlx, ~18 GB). At 30 tok/s, 4096 output tokens is ~2.3 min
-    # of decode plus prefill and a one-time cold load. 720s is therefore
-    # headroom, not a tight fit -- it still covers a conservative
-    # high-single-digit tok/s Q5_K_M worst case (non-MLX / thermal throttle)
-    # without stretching the inner timeout past the graph deadline.
-    # Weight quant is the Ollama tag, not an env var. On 48 GB M5 Pro the
-    # official MLX ladder is: 27b-mlx (4-bit, shipped) / 27b-nvfp4 (same 18 GB,
-    # higher-quality 4-bit) / 27b-mxfp8 (32 GB, tight with 16k KV) /
-    # 27b-mlx-bf16 (56 GB, does not fit). Runtime knobs live in
-    # macos/ollama-mlx.env (context 16384, keep_alive 30m, one model, no
-    # parallel slots, flash-attn + KV q8_0).
-    # Deliberately NOT higher: gate.py's asyncio.wait_for cancels the await, not
-    # the worker thread, so after a 504 an orphaned thread stays blocked in httpx
-    # for the remainder of this timeout (and the retry block below can multiply
-    # that on transport/5xx failures, which ARE retried -- see the note there).
-    # That orphan occupies a slot in the shared default ThreadPoolExecutor that
-    # rate limiting, audit writes, and /health also use, so an over-long value
-    # degrades the whole server, not just the one stalled query.
-    timeout_sec: 720  # Per-call LLM timeout. Must be < api.graph_timeout_sec (780) to avoid orphaned graph invocations.
+    # HTTP timeout in llm/client.py; boot validation requires graph_timeout_sec
+    # to exceed this by at least 30s. gate.py cancels the await, not its worker,
+    # so retries or slow work can still continue after the graph deadline.
+    # Measure local throughput with scripts/measure_local_llm_throughput.py.
+    timeout_sec: 720  # Boot margin: api.graph_timeout_sec >= timeout_sec + 30.
     retry:                  # bounded exp-backoff on transport/5xx/429; 4xx AND read-timeouts fail fast
       max_retries: 2        # extra attempts beyond the first (applies to transport/5xx/429 only)
       backoff_base_sec: 0.5 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (0.5s, 1s)
       backoff_max_sec: 30.0 # hard ceiling on a single backoff sleep; guards against a mis-tuned base/retries blocking the worker
-      # NOTE: a local read timeout is NOT retried (retry_on_timeout=False in
-      # llm/client.py). It means Ollama is stalled ("0% processing"); a retry
-      # would just wait another full timeout_sec and, since api.graph_timeout_sec
-      # cuts the request first, only orphans a worker thread on a 2nd stalled call.
+      # Local TimeoutException failures are not retried (llm/client.py), avoiding
+      # another full timeout after the graph's outer deadline.
     # Optional local backend failover (opt-in). When enabled, a short HTTP probe
     # prefers primary (above); if unreachable, LM Studio (or any OpenAI-compat
     # loopback server) is used for LocalLLMClient + /health. Not hybrid/cloud —
@@ -128,22 +55,15 @@ models:
     model: "all-MiniLM-L6-v2"
     dim: 384
     cache_dir: ".emb_cache"
-    # Query-embedding LRU cache size (retrieval/embeddings.py::_cached_embedding)
-    # is NOT set here — functools.lru_cache fixes maxsize at import time, before
-    # this file is parsed. Override the default (2048) via the
-    # CYCLAW_EMBED_CACHE_SIZE env var if a deployment needs a different
-    # memory/hit-rate trade-off.
+    # retrieval/embeddings.py fixes the query-cache size at import time:
+    # CYCLAW_EMBED_CACHE_SIZE overrides its 2048-entry default.
   grok:
-    # WARNING: cost-sensitive. Grok is $2.00/$6.00 per Mtok (input/output) vs local LLM free.
-    # Enabled since 2026-08-07. Still triple-gated: requires app.mode="hybrid" AND
-    # GROK_API_KEY set AND user_confirmed_online=true per-request. See docs/THREAT_MODEL.md.
+    # gate.py constructs this client only in hybrid mode with enabled: true;
+    # graph.py also requires per-request consent and a selected, available client.
     enabled: true
     base_url: "https://api.x.ai/v1"
-    model: "grok-4.5"   # grok-4.6 is the current xAI flagship; this pin stays grok-4.5 (operator may pin grok-4.6; spend.py has a grok-4.6 row). Tradeoff vs the previous default grok-4.3: newer + faster, but ~60%/140% pricier per input/output token ($2.00/$6.00 vs $1.25/$2.50 per Mtok) and a 500k context vs 1M. grok-4.3 still resolves — pin it here instead if cost or the longer window matters more than currency.
-    # 90s covers a full max_tokens (2048) generation at a conservative ~23 tok/s
-    # plus TTFT/queueing; the old 30s required ~68 tok/s sustained and timed out
-    # legitimate long answers. Worst-case wall clock with retries stays
-    # 3 x 90 + backoffs ≈ 275s, well inside api.graph_timeout_sec (780).
+    model: "grok-4.5"   # External fallback model; local cost estimates live in utils/spend.py.
+    # HTTP timeout; llm/client.py applies the retry policy below.
     timeout_sec: 90
     max_tokens: 2048
     temperature: 0.2
@@ -156,11 +76,9 @@ models:
   claude:
     enabled: true
     base_url: "https://api.anthropic.com/v1"
-    model: "claude-sonnet-5"   # current Claude 5 family Sonnet alias (verified 2026-07); second external fallback (PR #441). Check https://docs.anthropic.com/en/docs/about-claude/models before enabling — same drift risk as the grok model id above
+    model: "claude-sonnet-5"   # Second external fallback; constructed by gate.py when enabled.
     anthropic_version: "2023-06-01"
-    # Same sizing rationale as grok.timeout_sec above (Anthropic's own SDK
-    # defaults to 600s; 90s is the bounded-fallback compromise: covers a full
-    # 2048-token answer, keeps 3 retries ≈ 275s inside the 780s graph budget).
+    # Same bounded HTTP/retry policy as Grok; see llm/client.py.
     timeout_sec: 90
     max_tokens: 2048
     retry:
@@ -1159,3 +1077,4 @@ opentweet:
     base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
     api_key_env: "CYCLAW_API_KEY"
     timeout_sec: 790             # api.graph_timeout_sec (780) + 10s margin — client must lose the race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a client abort (same pattern as static/terminal.js)
+# RESTORED_FROM_8958d04c_SEE_FOLLOWUP

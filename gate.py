@@ -31,25 +31,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-# Resolve all bundled resources relative to this file, not the current working
-# directory. When CyClaw is launched by double-clicking gate.py (Windows) the cwd
-# is not guaranteed to be the repo root, so cwd-relative opens of config.yaml /
-# static/ would crash at import time and the console window would vanish before
-# the traceback could be read. Anchoring to __file__ makes startup cwd-independent.
+# Anchor bundled resources to the repository so startup works from another cwd.
 _BASE_DIR = Path(__file__).resolve().parent
 
-# The kill block itself now lives in utils/telemetry_kill.py so the entry points
-# that never import gate -- mcp_hybrid_server.py and `python -m retrieval.indexer`
-# -- enforce the identical set instead of relying on upstream defaults. This must
-# still run BEFORE the heavy imports below (graph/retrieval/langchain/chromadb):
-# those libraries latch their telemetry config at import time, so a later apply is
-# too late. utils.telemetry_kill is stdlib-only for exactly this reason -- importing
-# it cannot drag in a package that reads these vars on the way in.
-#
-# apply_telemetry_kill() both sets the vars and drops LangChain/LangSmith
-# credentials, and returns the mapping it enforced so the startup table below can
-# report it. Keep the local _TELEMETRY_KILL name: invariant-guard's G1 check
-# asserts (by AST) that an assignment to this name precedes the first heavy import.
+# Apply the stdlib-only telemetry controls before heavy imports can read the
+# environment. Keep _TELEMETRY_KILL: invariant-guard checks its assignment order,
+# and the startup table reports the mapping returned by utils.telemetry_kill.
 from utils.telemetry_kill import apply_telemetry_kill, verify_telemetry_contract
 
 _TELEMETRY_KILL = apply_telemetry_kill()
@@ -106,64 +93,24 @@ def require_api_key(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ):
-    # Fail-closed (PR #99 #4). Previously, when CYCLAW_API_KEY was unset the
-    # server ran in "open mode" and require_api_key was a no-op, leaving every
-    # /soul/* mutation endpoint unauthenticated. Now, if no key is configured the
-    # endpoint is REFUSED rather than left open — no key is generated, logged, or
-    # stored. Set CYCLAW_API_KEY to enable soul mutations.
-    #
-    # security.api_key_optional (default false) is the one deliberate escape
-    # hatch: an operator who explicitly opts in gets this dependency skipped
-    # entirely across every route it guards (soul/*, ops/*, memory/*,
-    # audit/summary). Checked first, before the env var, so opting in also
-    # means "no key needed" rather than "still refused when unset."
-    #
-    # The bypass additionally requires a LOOPBACK PEER, and that is the load-
-    # bearing half. _require_loopback_bind covers `python gate.py`, but nothing
-    # calls it when the app is served directly -- the shipped container's CMD is
-    # `uvicorn gate:app --host 0.0.0.0`, and any operator can run the same by
-    # hand. Keying the bypass off the socket's peer address instead of the bind
-    # makes it independent of how the process was launched: a remote caller
-    # never receives it, so the flag cannot silently open soul mutation or the
-    # /ops/* subprocess shims to a network. TrustedHostMiddleware is not a
-    # substitute -- a Host header is attacker-controlled, a peer address is not.
-    #
-    # The peer alone is not sufficient, and neither is peer+unproxied. See
-    # _api_key_bypass_allowed for the full set of conditions and what each one
-    # closes -- they are kept there rather than inline because every one of them
-    # was added in response to a distinct, verified bypass.
+    # Require a key unless _api_key_bypass_allowed approves the explicit opt-in,
+    # loopback peer, forwarding-header, and cross-site checks. A bind address
+    # or trusted Host header alone cannot authorize this bypass.
     if _api_key_bypass_allowed(request):
         return
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=401,
                             detail="Soul mutation disabled: CYCLAW_API_KEY not set")
-    # Constant-time comparison: a plain `!=` short-circuits on the first
-    # differing byte, leaking key length/prefix via response timing. compare_digest
-    # runs in time independent of how many leading characters match.
-    # Compare the UTF-8 bytes, not the str: hmac.compare_digest raises TypeError
-    # on a str operand containing a non-ASCII character, and Starlette decodes the
-    # Authorization header latin-1, so a token with any byte > 0x7F (a pasted
-    # curly quote, an accented character) would otherwise escape this handler as
-    # an unhandled 500 instead of the fail-closed 401 this endpoint promises. The
-    # bytes overload never raises on content and preserves the constant-time property.
+    # Compare bytes so invalid non-ASCII credentials reach the normal 401 path
+    # instead of compare_digest's str TypeError; keep the timing-safe comparison.
     if not credentials or not hmac.compare_digest(
         credentials.credentials.encode("utf-8"), api_key.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-# Per-IP rate limiter for /query. The limiter itself lives in utils/ratelimit.py
-# as a lock-synchronized class so the gateway and its tests share one
-# implementation (no duplicated logic) and concurrent requests under FastAPI's
-# threadpool cannot interleave and overcount.
-#
-# Settings come from config.yaml (api.rate_limit), falling back to the historical
-# 60 req / 60 s in-memory defaults. RateLimiter already supports sqlite
-# write-through persistence, but it was never wired in here, so per-IP counters
-# reset to zero on every process/container restart — a restart loop could let a
-# client exceed the documented 60 req/min ceiling. Set
-# api.rate_limit.persist_path (e.g. "data/rate_limits.db") to make counters
-# survive restarts; leaving it null preserves the original in-memory behavior.
+# Shared, synchronized per-IP limiter (utils/ratelimit.py). Persistence is
+# configured below; without a database backend, counters reset on restart.
 from fastapi import Request
 from utils.config_validation import (
     validate_auth_config,
@@ -176,12 +123,7 @@ from utils.config_validation import (
 )
 from utils.ratelimit import RateLimiter
 
-# Load config.yaml ONCE here, anchored to _BASE_DIR rather than the cwd. The
-# previous code opened a *relative* "config.yaml" for the rate-limit settings and
-# then re-opened (and re-parsed) the same file via _BASE_DIR for app init below.
-# The relative open crashes when gate.py is launched from a non-repo-root cwd
-# (e.g. double-clicked on Windows) — the very failure mode _BASE_DIR exists to
-# prevent — and the second read was pure startup overhead. One read, reused.
+# Parse the anchored config once for both rate-limit setup and app initialization.
 with open(_BASE_DIR / "config.yaml", encoding="utf-8") as _cfg_f:
     cfg = yaml.safe_load(_cfg_f) or {}
 # Fail fast on an out-of-range retrieval tunable (e.g. min_score > 1 silently
@@ -199,12 +141,8 @@ _rl_cfg = ((cfg.get("api", {}) or {}).get("rate_limit", {})) or {}
 RATE_LIMIT_REQUESTS = _rl_cfg.get("max_requests", 60)
 RATE_LIMIT_WINDOW = _rl_cfg.get("window_seconds", 60)  # seconds
 RATE_LIMIT_DB_PATH = _rl_cfg.get("persist_path") or None
-# Optional Postgres persistence for rate-limit state (opt-in; defaults to None →
-# sqlite persist_path if set, else in-memory). Resolution order: explicit
-# api.rate_limit.database_url → CYCLAW_RATELIMIT_DB_URL. Deliberately does NOT
-# fall back to the shared CYCLAW_DB_URL (personality DB) — an operator setting
-# that for the soul database should not silently opt rate-limiting into
-# Postgres too; each subsystem's Postgres backend is opted into independently.
+# Rate-limit Postgres is a separate opt-in from the personality database:
+# explicit database_url, then CYCLAW_RATELIMIT_DB_URL; never CYCLAW_DB_URL.
 RATE_LIMIT_DB_URL = (
     _rl_cfg.get("database_url")
     or os.environ.get("CYCLAW_RATELIMIT_DB_URL")
@@ -420,8 +358,6 @@ def _sanitize_error(exc: Exception) -> str:
 # =============================================================================
 # App Init
 # =============================================================================
-# cfg was already loaded once above (anchored to _BASE_DIR) — reuse it instead
-# of re-reading and re-parsing config.yaml a second time.
 
 setup_logging(cfg)
 logger = logging.getLogger("cyclaw.gate")
@@ -432,11 +368,7 @@ if not os.environ.get("CYCLAW_API_KEY", ""):
         "(fail-closed). Set CYCLAW_API_KEY to enable them."
     )
 
-# Was a boot-time warning only; every OTHER relational config invariant in
-# this module (min_score range, soul_max_chars) already fails closed via
-# ConfigError, so a misconfigured timeout pair silently degraded in
-# production (orphaned graph invocations under load) instead of failing at
-# start like its siblings. See utils.config_validation.validate_boot_timeout_config.
+# Reject insufficient LLM/graph timeout headroom at boot; see utils.config_validation.
 validate_boot_timeout_config(cfg)
 validate_fallback_confirm_placeholder(cfg)
 
@@ -622,22 +554,13 @@ app.add_middleware(_SecurityHeadersMiddleware)
 retriever = None
 compiled_graph = None
 
-# Pass the already-parsed cfg dict into both clients rather than letting them
-# re-open a *relative* "config.yaml" (their default when cfg is None). That
-# relative read is cwd-dependent and crashes at import when gate.py is launched
-# from a non-repo-root cwd — the same fragility _BASE_DIR / the single-read above
-# exist to prevent. LocalLLMClient is always built, so this hardens every mode.
+# Reuse the anchored config so clients do not load their cwd-relative default.
 local_llm = LocalLLMClient(cfg=cfg)
 
 grok = None
-# This `if` IS two of the triple-gate's three conditions (mode=="hybrid" AND
-# grok.enabled) — the graph itself only checks the third (user confirmed) plus
-# whether this client ended up non-None. Building a GrokClient anywhere else,
-# or loosening this check "to simplify," would let a confirmed low-score query
-# reach a paid external API even in offline mode, since the graph has no
-# backstop for mode/enabled (see INVARIANTS.md Rule 2).
-# ``is True`` is deliberate: quoted YAML ``"false"`` must fail closed instead
-# of becoming a truthy string that constructs an external client.
+# These construction guards enforce hybrid mode and provider enablement (I3).
+# graph.user_gate_router adds consent, provider selection, and availability;
+# it does not recheck mode/enabled. Literal True rejects quoted YAML "false".
 if (
     cfg.get("app", {}).get("mode") == "hybrid"
     and cfg["models"].get("grok", {}).get("enabled") is True
@@ -653,15 +576,8 @@ if (
     claude = ClaudeClient(cfg=cfg)
 
 def _usable_online_providers() -> list[str]:
-    # The SAME predicate graph.py's user_gate_router applies before routing to a
-    # fallback node: the client must exist (mode=="hybrid" AND that provider
-    # enabled, both decided above) AND is_available() must be true (its API key
-    # env var is set). Kept as one helper so the confirm prompt cannot offer a
-    # provider the router would silently decline to use -- before this, the
-    # prompt named Grok and Claude unconditionally, so an operator running fully
-    # offline could pick "Send to Grok" and get a local offline answer labelled
-    # as if it had gone to Grok. is_available() is pure key presence with no
-    # network probe (llm/client.py), so calling it per request costs nothing.
+    # Match graph.user_gate_router's availability check so the confirmation UI
+    # offers only usable clients. is_available() checks key presence without a network probe.
     usable: list[str] = []
     if grok is not None and grok.is_available():
         usable.append("grok")
@@ -1007,9 +923,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
     if username:
         initial_state["username"] = username
 
-    # Overall server-side deadline: a stalled Ollama / retrieval must not hold
-    # the request (and a worker thread) open indefinitely. The per-call LLM
-    # timeouts are an inner bound; this is the outer one covering the whole graph.
+    # Bound the HTTP wait for the graph. Cancelling to_thread's await does not
+    # stop its worker; LLM timeouts and retries still govern background completion.
     graph_timeout = cfg.get("api", {}).get("graph_timeout_sec", 780)
     try:
         result = await asyncio.wait_for(
