@@ -359,6 +359,17 @@ def test_iorails_env_fails_engine_startup(monkeypatch):
         get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
 
 
+@pytest.mark.skipif(not NEMO_AVAILABLE, reason="nemoguardrails not installed")
+def test_get_cyclaw_guardrails_loads_with_reasoning_effort():
+    from guardrails.integration import get_cyclaw_guardrails, reset_rails_singleton
+
+    reset_rails_singleton()
+    cfg = GuardrailsConfig(enabled=True, reasoning_effort="none")
+    rails = get_cyclaw_guardrails(cfg)
+    assert rails is not None
+    reset_rails_singleton()
+
+
 def test_nemo_template_matches_guardrails_block():
     # Drift pin: the shipped NeMo template must keep pointing at the same
     # local endpoint as config.yaml's guardrails: block (LM Studio -> Ollama
