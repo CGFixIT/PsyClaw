@@ -713,6 +713,30 @@ def test_disabled_banner_inside_a_parsed_record_is_not_a_disabled_layer(cfg, mon
     assert body["parsed"]["status"] == "pending_decision"
 
 
+def test_disabled_layer_is_detected_before_stdout_redaction(cfg, monkeypatch):
+    """OpsResult.to_dict redacts stdout. A privacy pattern that matches part
+    of the banner (for example Agentic) must not hide the disabled no-op
+    and restore HTTP 200 + ok=true.
+    """
+    def _redacted(action: str, **_kwargs):
+        return SimpleNamespace(
+            ok=True,
+            parsed=None,
+            stdout=_DISABLED_STDOUT,
+            to_dict=lambda: {
+                "subsystem": "agentic", "action": action, "exit_code": 0, "ok": True, "label": "ok",
+                "stdout": "[REDACTED] layer [REDACTED]\n", "stderr": "", "parsed": None,
+            },
+        )
+
+    monkeypatch.setattr(harness_server, "run_agentic_op", _redacted)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    resp = client.post(f"/api/agent/runs/{_UNKNOWN_RUN_ID}/push", json={})
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "AGENTIC_DISABLED"
+
+
 # --- status / decision plumbing ---------------------------------------------
 
 
