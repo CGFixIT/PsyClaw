@@ -16,9 +16,15 @@ related:
 > 2026-08-04 SHIPPED status line.
 >
 > **What's left:**
-> - Nothing outstanding — historical contract only. Candidate for deletion
->   once `docs/NeMo/README.md` and `phase3_implementation_plan.md` no longer
->   need to cite its Decision 1-5 rationale.
+> - Nothing outstanding — historical contract only. **KEEP; not a deletion
+>   candidate** (re-verified 2026-09-06): Decisions 1-5 below are the only
+>   record of this rationale and are cited by name from live code and tests —
+>   `gate.py:758`, `graph.py:33,447` (Decision 3), `utils/guardrail_bridge.py:10`
+>   (Decision 1), `config.yaml:1049`, `tests/test_guardrail_bridge.py:6`,
+>   `tests/test_graph.py:1432`, `tests/test_guardrails_integration.py:388`,
+>   `tests/test_due_diligence_invariants.py:340`, both CyClaw-Sandbox
+>   `test-specifications.md` copies, and four sibling NeMo docs.
+>   `docs/NeMo/README.md` intentionally indexes it under "Historical plans".
 
 > **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
 > [`README.md`](./README.md). This file is the historical input-rail contract

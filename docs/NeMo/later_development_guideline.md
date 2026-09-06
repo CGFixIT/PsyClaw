@@ -18,8 +18,11 @@ related:
 >
 > **What's left:**
 > - Nothing outstanding — historical decision log only; current state lives
->   in `docs/NeMo/README.md`. Candidate for deletion once no other doc links
->   to it for its original decisions.
+>   in `docs/NeMo/README.md`. **KEEP; not a deletion candidate** (re-verified
+>   2026-09-06): cited from live code/config for its rationale —
+>   `config.yaml:1042` and `guardrails/integration.py:267` (the reason
+>   `guardrail_safety_node` stays unwired) — plus `phase2`/`phase3`/`phase4b`
+>   and `README.md`'s "Historical plans" index.
 
 > **Superseded for status (2026-08-27).** Prefer [`README.md`](./README.md)
 > for the live path×stage×engine matrix. This guideline remains a historical

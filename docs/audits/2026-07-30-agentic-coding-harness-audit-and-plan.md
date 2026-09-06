@@ -1,5 +1,15 @@
 # CyClaw Agentic Coding Harness — Claim Audit + Production Implementation Plan
 
+> **Note (2026-09-06):** `docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md`,
+> cited below (line-ranged, in the P3 section and elsewhere) as the source of
+> unreproduced design detail — notably the `model_adapter.py` adapter skeleton
+> (`roadmap:752-781`) and the `HandoffEnvelope`/`sanitize_handoff` design
+> (`roadmap:875-901`) — was deleted 2026-09-06 as a fully-superseded doc (see
+> `CLAUDE.md`'s DeepAgents-subgraph retirement note). Its content is recoverable
+> via `git log --diff-filter=D -- docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md`;
+> a condensed summary lives in `docs/ARCHIVE_AND_ROADMAP.md` §2c. This audit
+> otherwise stands as a dated record (`CLAUDE.md` §5) and is not rewritten here.
+
 **Date:** 2026-07-30.
 **Repo state audited:** `origin/main` @ `bf26a46` (2026-07-30 15:35 -0400). Working
 tree at that commit. All findings below are file:line-verified against that tree.

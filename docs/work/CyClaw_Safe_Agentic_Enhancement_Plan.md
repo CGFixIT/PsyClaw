@@ -41,7 +41,10 @@ the `sync/` isolation template (`sync/runner.py:467`, `:519`), the governance
 pattern (`utils/personality.py:175-246`), shared audit (`utils/logger.py:106`).
 
 ## What makes each surveyed tool excellent (and where it conflicts)
-See `subagent_researcher_notes.md` for citations + confidence. Summary:
+The survey's confidence labels and adopted/rejected lessons are preserved in
+`docs/ARCHIVE_AND_ROADMAP.md` §3 ("`subagent_researcher_notes.md` — the
+external-tooling survey"); the original file, including its source-URL list,
+was deleted 2026-09-06 and lives only in git history. Summary:
 
 | Tool | Borrowed lesson | Rejected (conflicts with invariant) |
 |---|---|---|
