@@ -331,9 +331,13 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   verified on the default Claude Code cloud sandbox image
   (`sandbox-ccr-default`, Ubuntu 24.04): Python 3.10/3.11/3.12/3.13 are **all
   already present** at `/usr/bin/python3.NN`, but `update-alternatives --list
-  python3` registers only 3.11, and CyClaw's dependencies are pre-installed
-  into 3.11's `dist-packages` — so bare `python3`/`pip3`/`pytest` silently run
+  python3` registers only 3.11 — so bare `python3`/`pip3`/`pytest` silently run
   under 3.11 against a project whose `pyproject.toml` requires `>=3.12,<3.13`.
+  (An earlier revision of this trap said CyClaw's deps were pre-installed into
+  3.11's `dist-packages`; on 2026-09-06 no interpreter on the image had torch,
+  chromadb, langgraph or pytest, so treat the venv below as mandatory. The
+  `cyclaw-gotchas` skill's `driver.sh venv` does it, including the fallback
+  for when the egress proxy denies `download.pytorch.org`.)
   This is invisible until a version-gated stdlib call fails: `test_agentic_*`
   (`agentic/deepagent_github/repo_workspace.py`'s `shutil.rmtree(onexc=...)`,
   a 3.12+ parameter) fails 142 tests with no other symptom, and it is easy to
@@ -810,6 +814,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/add-comment` | task | Comment-only pass adding ELI5-toned WHY comments to under-documented code |
 | `/karpathy-guidelines` | mode | Anti-overcomplication guardrails: surgical diffs, surfaced assumptions, verifiable success criteria |
 | `/cyclaw-advisor` | mode | "Legal" persona for privacy/DPA/DSR/breach-analysis review of CyClaw changes |
+| `/cyclaw-gotchas` | reference + driver | Session-tested traps for Claude Code sandboxes (proxy-denied torch/Hugging Face hosts, the 3.12 venv, the silent pytest summary, PR/check-in/review-bot process, the harness single-stream 409s) plus `driver.sh` (`inventory`/`venv`/`serve`/`probe`/`stop`/`test`/`checks`). Load before installing deps, running tests, launching `gate.py`, or driving a PR |
 
 ### Standalone commands (no skill folder)
 
