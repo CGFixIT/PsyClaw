@@ -56,8 +56,9 @@ class _SlicedStream:
     """httpcore stream whose reads wake every ``_SLICE_SEC`` to honor abort."""
 
     def __init__(self, inner: object, cancel: threading.Event) -> None:
-        extra = getattr(inner, "get_extra_info", None)
-        sock = extra("socket") if callable(extra) else getattr(inner, "_sock", None)
+        # Bandit B610 matches any call named extra() as Django QuerySet.extra.
+        info = getattr(inner, "get_extra_info", None)
+        sock = info("socket") if callable(info) else getattr(inner, "_sock", None)
         self._inner = inner
         self._cancel = cancel
         self._sock = sock
@@ -94,8 +95,8 @@ class _SlicedStream:
         return _SlicedStream(starter(ssl_context, server_hostname, timeout), self._cancel)
 
     def get_extra_info(self, extra_key: str) -> object:
-        extra = getattr(self._inner, "get_extra_info", None)
-        return extra(extra_key) if callable(extra) else None
+        info = getattr(self._inner, "get_extra_info", None)
+        return info(extra_key) if callable(info) else None
 
 
 def _wrap_connect(
