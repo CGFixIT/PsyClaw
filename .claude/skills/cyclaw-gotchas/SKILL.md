@@ -216,11 +216,15 @@ expire it.
 - **`mergeable_state: "unstable"` means checks pending or failing, not a
   conflict.** `"dirty"` is the conflict state. Read the check runs before
   acting on "unstable".
-- **Only claim a check-in is armed if you created it.** On 2026-09-06 the
-  #1317 timer was deleted at merge and no replacement was armed for #1318,
-  while the session reported one was. `update_trigger` on a deleted id
-  returns not-found; create a new `send_later` and keep **one** timer that
-  names every open PR, re-scoped as PRs merge.
+- **`list_triggers` is the record of check-ins; memory is not.** On
+  2026-09-06 the session armed a one-shot timer for #1318 at 00:31, lost
+  track of it, told the owner at 01:07 that none existed, armed a second
+  overlapping one, and was then woken by the first at 01:32. Before
+  asserting or denying that a check-in exists, run `list_triggers`
+  (`include_completed` shows fired one-shots as `run_once_fired`). Keep
+  **one** live timer that names every open PR and re-scope it with
+  `update_trigger` as PRs merge; `update_trigger` on a deleted id returns
+  not-found, so re-scope rather than delete-and-recreate.
 - **Trim `list_pull_requests` with `fields`** (`number,title,head`); the full
   payload is large and mostly body text.
 - **Codex P2s are bug reports; verify against the code, then fix.** On #1318
