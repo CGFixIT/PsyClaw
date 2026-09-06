@@ -109,9 +109,11 @@ sign-off line, or a dated historical record: `docs/agentic/AGENTIC_README.md`,
 `docs/NeMo/later_development_guideline.md`,
 `docs/NeMo/phase2_implementation_plan.md`, `docs/online-llm/readme.md`,
 `docs/future_langchain_plans.md`, `docs/codex-findings-7202026.md`,
-`docs/zIdeas/API.md`, `docs/comparisons/INVARIANTS_COMPARISON.md`. If a
+`docs/comparisons/INVARIANTS_COMPARISON.md`. If a
 still-open idea from one of those files is what you're looking for, it is
-tracked in that file, not duplicated here.
+tracked in that file, not duplicated here. (`docs/zIdeas/API.md` was also on
+this list; it was deleted 2026-09-06 — see the dated update near the top of
+this file — so it no longer "stays separate," it simply no longer exists.)
 
 ## Table of contents
 
@@ -586,7 +588,7 @@ affected test suite afterward and updating `pyproject.toml` +
 the package appears there).
 
 **Verification note:** re-checked directly against `pyproject.toml` and
-`constraints.txt` on 2026-09-06 — 7 of the 11 rows below have since been
+`constraints.txt` on 2026-09-06 — 8 of the 11 rows below have since been
 bumped to (or past) their recorded target pin (`ruff` went further, to
 0.16.1); `psycopg`/`pgvector`/`websockets` remain at their original pins and
 still need the Tier 2/3 review described below.
