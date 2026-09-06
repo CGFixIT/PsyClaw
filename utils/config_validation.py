@@ -34,13 +34,15 @@ def validate_retrieval_config(cfg: dict[str, Any]) -> None:
     Checks:
       * the ``retrieval`` block exists and is a mapping;
       * ``min_score`` is a number in ``[0, 1]`` (RRF-fused scores live there);
-      * ``min_semantic_score``, when present, is a number in ``[0, 1]`` (cosine);
+      * ``min_semantic_score``, when the key is present, is a number in
+        ``[0, 1]`` (cosine). A present null or non-number is rejected;
       * ``top_k_semantic`` / ``top_k_keyword`` / ``rrf_k`` are positive integers.
 
     Valid configs (the shipped defaults: ``min_score: 0.028``,
     ``min_semantic_score: 0.30``, ``top_k_*: 5``, ``rrf_k: 60``) pass unchanged
     -- this only rejects out-of-range typos. Absent ``min_semantic_score`` is
-    allowed so partial test configs keep RRF-only routing.
+    allowed so partial test configs keep RRF-only routing. A present null is
+    rejected at boot so ``route_by_score_node`` never compares a cosine to None.
     """
     retrieval = cfg.get("retrieval")
     if not isinstance(retrieval, dict):
@@ -56,14 +58,13 @@ def validate_retrieval_config(cfg: dict[str, Any]) -> None:
             details={"received": min_score},
         )
 
-    min_semantic = retrieval.get("min_semantic_score")
-    if min_semantic is not None and (
-        not _is_real_number(min_semantic) or not 0 <= min_semantic <= 1
-    ):
-        raise ConfigError(
-            f"retrieval.min_semantic_score must be a number in [0, 1], got: {min_semantic!r}",
-            details={"received": min_semantic},
-        )
+    if "min_semantic_score" in retrieval:
+        min_semantic = retrieval["min_semantic_score"]
+        if not _is_real_number(min_semantic) or not 0 <= min_semantic <= 1:
+            raise ConfigError(
+                f"retrieval.min_semantic_score must be a number in [0, 1], got: {min_semantic!r}",
+                details={"received": min_semantic},
+            )
 
     for key in _POSITIVE_INT_KEYS:
         val = retrieval.get(key)
