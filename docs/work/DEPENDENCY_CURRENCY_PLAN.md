@@ -1,5 +1,11 @@
 # Dependency Currency — Bump Candidates Plan
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE. Re-verified against current `constraints.txt`: Tier 1 (`ruff` 0.16.1, `mypy` 2.3.0), Tier 2's `langgraph` (1.2.9), `langchain` (1.3.14), `langchain-openai` (1.3.5), and Tier 3's `fastapi` (0.139.2), `uvicorn` (0.51.0), `langchain-core` (1.5.0) all match or exceed the doc's targets. Still unchanged from the 2026-07-21 snapshot: `psycopg` (3.2.13), `pgvector` (0.4.2), and `websockets` (15.0.1) — exactly the three items the doc's own 2026-08-15 note already flagged as open.
+>
+> **What's left:**
+> - Bump `psycopg`/`pgvector` together (Tier 2) with the listed Postgres-service test targets
+> - Confirm current `langgraph`/`langgraph-sdk` compatibility with `websockets` 16.x before touching that pin (still gated per this doc's own Tier 3 caveat)
+
 **Status:** Partially done — most Tier 1-3 bumps below have since landed
 without this doc being updated (verified 2026-08-15 against `constraints.txt`
 on current `main`): `ruff` is now `0.16.1` (past even the 0.15.22 target),

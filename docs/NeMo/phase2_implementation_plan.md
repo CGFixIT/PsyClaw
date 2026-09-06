@@ -9,6 +9,17 @@ related:
   - graph.py
 ---
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED by
+> `docs/NeMo/README.md`. `guardrail_input` is confirmed live on `main` via
+> `utils/guardrail_bridge.py`, still opt-in behind `guardrails.enabled: false`
+> (`config.yaml:1043`). No further verification changed since this doc's own
+> 2026-08-04 SHIPPED status line.
+>
+> **What's left:**
+> - Nothing outstanding — historical contract only. Candidate for deletion
+>   once `docs/NeMo/README.md` and `phase3_implementation_plan.md` no longer
+>   need to cite its Decision 1-5 rationale.
+
 > **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
 > [`README.md`](./README.md). This file is the historical input-rail contract
 > (still valid for the decisions it recorded). Do not treat the body as a to-do.

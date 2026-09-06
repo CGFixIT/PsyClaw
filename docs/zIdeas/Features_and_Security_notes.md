@@ -1,4 +1,11 @@
 # 1)
+
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL. Items 1-2 are already marked DONE in this file and confirmed shipped: `auth.enabled` (config.yaml:567, `gate_auth.py`) gates `/query` via `require_session_or_token`, and role-based access exists in `utils/authn.py` (admin/operator/audit roles). Item 4 (container deployment) has since progressed well beyond "keep in mind" — `deploy/` now holds opt-in AppArmor/seccomp/Falco hardening profiles alongside the existing `Dockerfile`/`docker-compose.yml`. Items 3, 5, and 6 remain open exactly as marked (`*`): no Telegram encrypted-transport research doc, no per-regulation compliance deep-dive beyond `docs/THREAT_MODEL.md`, and no markdown corpus-creation wizard exists anywhere under `harness/` or `agentic/`.
+>
+> **What's left:**
+> - Item 3: Telegram in-flight/at-rest encryption research (still just a personal note, no doc)
+> - Item 6: a deliberately-basic markdown wizard for corpus authoring (not started; note also flags "don't over-build it")
+
 - Don’t forget that curl requests or powershell api commands can still query cyclaw if on same lan - need to add authentication before truly considering this secure
 > DONE
 

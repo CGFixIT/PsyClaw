@@ -1,5 +1,10 @@
 # Governed Skills Registry — Design & Governance
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE. `agentic/registry.py` exists and matches every guarantee described below; the harness read-only views (`harness/registry_view.py`, `harness/skills_view.py`) also exist, confirming `GET /api/registry`/`/skills all` are wired as read-only consumers, never writers. `tests/test_agentic_registry.py` and `tests/test_agentic_registry_contract.py` are both present, pinning the propose/apply/injection-gate/reason-required/atomic-write behavior this doc describes.
+>
+> **What's left:**
+> - Nothing outstanding — this is a living design/governance reference for shipped code, not a roadmap; keep it in sync with `agentic/registry.py` if the registry's shape ever changes.
+
 > Implemented in `agentic/registry.py`. This doc explains *why* it is shaped like
 > the soul layer and what guarantees it inherits. The harness console **reads**
 > this file (`GET /api/registry`, `/skills all`) and never writes it.

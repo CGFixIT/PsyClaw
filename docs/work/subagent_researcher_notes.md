@@ -1,5 +1,10 @@
 # External Agentic Tooling — Research Notes
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE as a research artifact — it's a snapshot of external-tool survey conclusions, not a build plan, so "complete" means its recommendations were already acted on rather than that there's a checklist to finish. The CyClaw-side claims it cites still hold: `agentic/gh_client.py` defines `_READ_OPS` as a read-only allow-list (confirmed at `agentic/gh_client.py:192`), `agentic/registry.py` implements a governed `SkillRegistry` (confirmed at `agentic/registry.py:236`), and the soul DB is `data/personality/cyclaw_soul.db` per `config.yaml:239`. The "adopt gh CLI as subprocess, not PyGithub/SDK" decision it argues for is exactly what shipped (`agentic/gh_client.py` shells out to `gh`, no PyGithub dependency in `pyproject.toml`).
+>
+> **What's left:**
+> - Nothing outstanding — the external survey's recommendations were already adopted (governed registry, no autonomous writes, `gh` subprocess over an SDK). Historical record of a since-settled decision; candidate for deletion or folding a summary into `docs/agentic/AGENTIC_README.md` if the research trail is worth keeping at all.
+
 > Subagent: Researcher. Surveys modern agentic coding tools and maps each to a
 > *transferable* lesson for CyClaw. **Confidence labels are explicit.** Sources
 > are secondary (blogs/changelogs/docs) gathered June 2026 and listed at the end;

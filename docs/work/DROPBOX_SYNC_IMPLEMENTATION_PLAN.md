@@ -1,5 +1,10 @@
 # CyClaw Dropbox Corpus Sync — Implementation Planning Guide
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE — confirmed independently of the doc's own "Implemented" banner. `sync/` (`cli.py`, `runner.py`, `scheduler.py`, `filters.py`, `config.py`, `selftest.py`) all exist; `utils/errors.py` defines the full `SyncError` hierarchy (`RcloneNotInstalledError`, `RcloneVersionError`, `RcloneTimeoutError`, `SyncConfigError`, `SchedulerError`, `SyncRuntimeError` — a superset of Appendix C-1); `"sync"` is present in all three `pyproject.toml` locations (packages, package-data, coverage source); `docs/SYNC_README.md` exists; `POST /ops/sync` is wired in `gate_ops.py:175`. This is the rare planning doc where the shipped implementation slightly exceeded the plan (an extra `RcloneTimeoutError` beyond Appendix C-1's five subclasses).
+>
+> **What's left:**
+> - Nothing outstanding — fully implemented; see `sync/`, `utils/errors.py`, `gate_ops.py:175`, `docs/SYNC_README.md`, and the three `pyproject.toml` references above. This doc is now a historical record (its own banner already says so) and is a candidate for deletion — its rationale is preserved in `docs/SYNC_README.md` and the Appendix sections here that remain genuinely useful as design history.
+
 **Status:** **Implemented** (banner added 2026-07-19) — shipped as the out-of-band `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`), drivable from the terminal's Sync Console (`POST /ops/sync`) and covered by `tests/test_sync_*.py`. This document is the original planning guide, kept for design rationale; shipped behavior is documented in `docs/SYNC_README.md` and `docs/! How-To-Guides/Dropbox_Sync_Guide.md`.
 **Target:** `main` (via feature branch → reviewed PR)
 **Author:** Planning synthesis (Claude) from the PsyClaw `sync/` prior art + two research passes
