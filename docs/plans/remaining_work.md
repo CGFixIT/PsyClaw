@@ -55,21 +55,26 @@ the graph. H1/H2/H3 are operating rules, not open tickets.
 - Auth unique-violation classification — [#1044](https://github.com/cgfixit/CyClaw/pull/1044) / [#1216](https://github.com/cgfixit/CyClaw/pull/1216) / [#1219](https://github.com/cgfixit/CyClaw/pull/1219) / [#1230](https://github.com/cgfixit/CyClaw/pull/1230). Integrity already held. Do not demand `INSERT … ON CONFLICT`
 - NeMo 4b `check_soul_leak` — [#1155](https://github.com/cgfixit/CyClaw/pull/1155). Enforced on offline `check_output`, in `DEFAULT_OUTPUT_RAILS`, and the Colang flow. [`docs/NeMo/phase4b_soul_leak.md`](../NeMo/phase4b_soul_leak.md) + [`docs/NeMo/README.md`](../NeMo/README.md). Ignore the stale “NOT YET FULLY IMPLEMENTED” comment in `config.yaml`
 - **#1134 NeMo program** — [#1134](https://github.com/cgfixit/CyClaw/issues/1134) **closed** (2026-08-27); `nemoguardrails==0.24.0`. Still do not wire `safe_generate` into the graph
+- Unslop v1.1 leftover (doc-sync + measurement plan) — issue [#1129](https://github.com/cgfixit/CyClaw/issues/1129) **closed** via [#1270](https://github.com/cgfixit/CyClaw/pull/1270) (plan header corrected). Measurement itself is still unrun; do not re-vendor or re-wire
+- Authn process-local lock / unique-violation classification — issue [#1252](https://github.com/cgfixit/CyClaw/issues/1252) **closed** via [#1273](https://github.com/cgfixit/CyClaw/pull/1273). Window is documented-open-by-design (constraint stays the arbiter); do not demand `INSERT … ON CONFLICT`
 
-Closed since the 2026-08-16 snapshot and not in the open table: [#958](https://github.com/cgfixit/CyClaw/issues/958), [#961](https://github.com/cgfixit/CyClaw/issues/961), [#962](https://github.com/cgfixit/CyClaw/issues/962), [#963](https://github.com/cgfixit/CyClaw/issues/963), [#964](https://github.com/cgfixit/CyClaw/issues/964), [#965](https://github.com/cgfixit/CyClaw/issues/965), [#966](https://github.com/cgfixit/CyClaw/issues/966), [#974](https://github.com/cgfixit/CyClaw/issues/974), [#1134](https://github.com/cgfixit/CyClaw/issues/1134).
+Closed since the 2026-08-16 snapshot and not in the open table: [#958](https://github.com/cgfixit/CyClaw/issues/958), [#961](https://github.com/cgfixit/CyClaw/issues/961), [#962](https://github.com/cgfixit/CyClaw/issues/962), [#963](https://github.com/cgfixit/CyClaw/issues/963), [#964](https://github.com/cgfixit/CyClaw/issues/964), [#965](https://github.com/cgfixit/CyClaw/issues/965), [#966](https://github.com/cgfixit/CyClaw/issues/966), [#974](https://github.com/cgfixit/CyClaw/issues/974), [#1134](https://github.com/cgfixit/CyClaw/issues/1134), [#1129](https://github.com/cgfixit/CyClaw/issues/1129), [#1252](https://github.com/cgfixit/CyClaw/issues/1252).
 
 ## Open GitHub issues (re-list before acting)
 
-Exactly five OPEN issues on `cgfixit/CyClaw` as of this verification. The table
-records each issue's closure gate; consult the issue body for optional,
-non-blocking cleanup that is not part of that gate.
+Of the five OPEN issues this file originally tracked as of the 2026-09-02
+verification, two ([#1129](https://github.com/cgfixit/CyClaw/issues/1129),
+[#1252](https://github.com/cgfixit/CyClaw/issues/1252)) have since closed —
+moved to "Do not reopen" above. The table below covers the three that remain
+open of that original set; re-list the full open-issue set on GitHub before
+acting, since new issues may have opened since this snapshot that this file
+does not yet track. Consult each issue body for optional, non-blocking
+cleanup that is not part of its closure gate.
 
 | # | Title | What is actually left |
 |---|---|---|
 | [#1013](https://github.com/cgfixit/CyClaw/issues/1013) | Agentic spend ledger | Code ACs on main. Close-out is live-key Leg 1 (`tests/spend_live_probe.py`) + Leg 2 (`real-repo-run-plan --confirm-online`). Do not rebuild the emitter |
 | [#1128](https://github.com/cgfixit/CyClaw/issues/1128) | Numbat remainder | Slices A+B on main. Left: Slice C parked (on-path sequence policy needs a hashed session/checkpointer; #1071 keeps the offline detector off `/query`) and Slice D tracking (`source_agent` stays `"unknown"` until upstream accepts `cyclaw`) |
-| [#1129](https://github.com/cgfixit/CyClaw/issues/1129) | Unslop v1.1 leftover | v1 on main; plan header restamped (no longer claims "planning only"). Left: measure FP on an opt-in local run. Do not enable by default. Do not put it on `/query` |
-| [#1252](https://github.com/cgfixit/CyClaw/issues/1252) | Authn process-local lock | Integrity already held. Origin port/scheme parity shipped in [#1267](https://github.com/cgfixit/CyClaw/pull/1267). Left: live two-process `create_user` test. Do not demand `INSERT … ON CONFLICT` |
 | [#1255](https://github.com/cgfixit/CyClaw/issues/1255) | chromadb CVE / sqlite-vec | PostHog path is dead code at pin 1.5.9. sqlite-vec swap is a parked design (not this pass). Cheaper half: startup hash-pin of the telemetry maps + `Settings(anonymized_telemetry=False)` sites |
 
 Ignore PR #415 if it reappears (it is **closed**; still skip it during agentic coding if reopened).

@@ -789,7 +789,7 @@ forward-looking.
   `test_personality_postgres.py`, `test_ratelimit_postgres.py`, and
   `test_pgvector_store.py` — no sqlconnect test file is wired into it, and there is no
   MSSQL service container anywhere in `ci.yml`. `agentic/sqlconnect/client.py:8-10`
-  still marks `_execute` (`client.py:471`) and one helper class (`client.py:551`)
+  still marks `_execute` (`client.py:590`) and one helper class (`client.py:678`)
   `# pragma: no cover` for exactly this reason — the connect/execute paths need a live
   DB the CI doesn't provide for this connector.
 - **Schema-aware NL→SQL helper: NOT implemented.** No `nl2sql`/text-to-SQL reference
@@ -799,9 +799,9 @@ forward-looking.
   still exactly the two dialects the doc describes as the v0.1 baseline.
 - **Per-query cost caps: NOT implemented.** No cost-cap construct found.
 - **EXPLAIN pre-checks: partially shipped, Postgres-only.** `SqlConnectClient.explain`
-  (`client.py:521-539`) already exists and runs a plain (non-`ANALYZE`) `EXPLAIN` before
+  (`client.py:644`) already exists and runs a plain (non-`ANALYZE`) `EXPLAIN` before
   execution — but it explicitly refuses the `mssql` driver
-  (`client.py:531-535`, "explain is not supported for the mssql driver"), so this is
+  (`client.py:654-659`, "explain is not supported for the mssql driver"), so this is
   half-done, not absent, and the doc doesn't mention it exists at all for Postgres.
 - **Row-level PII redaction reusing `policy.privacy`: NOT implemented.** No reference
   to `policy.privacy` or PII redaction anywhere under `agentic/sqlconnect/`.
@@ -833,14 +833,15 @@ forward-looking.
   which is a different thing from the direct-SMB-client idea sketched here — don't
   conflate the two when picking this up.
 
-### When to extract a shared base (unchanged; still just a trigger condition, not a plan)
-The doc's rule stands as stated and nothing currently contradicts it: once a third
-connector (most likely IMAP or direct-SMB) joins `fsconnect`/`sqlconnect`, extract a
-`connectors/base.py` ABC for the shared shape (disabled-default config, op allow-list,
-audit, four-gate mutation, selftest, CLI exit-code contract) — as new-connector
-scaffolding only, never retrofitted onto the existing `agentic/`/`sync/` modules. No
-third connector exists yet, so this remains purely a trigger condition to watch for,
-not an in-flight task.
+### When to extract a shared base (trigger condition arrived; still not acted on)
+A third connector has since landed: `agentic/netconnect/` (passive LAN inventory,
+listed in `CLAUDE.md`'s module map). It is read-only (no writer, no four-gate
+mutation path — there's nothing to mutate), so it only partially matches the shared
+shape the source doc anticipated (disabled-default config, op allow-list, audit,
+selftest, CLI exit-code contract all apply; the mutation-gate piece doesn't). The doc's
+rule (extract a `connectors/base.py` ABC once a third connector joins `fsconnect`/
+`sqlconnect`) has therefore technically fired, but no such extraction has happened —
+treat this as an open item to revisit, not still a hypothetical.
 
 ## 6. Session/Sync Hygiene Notes
 
@@ -1013,7 +1014,7 @@ that test, not a judgment on the idea's merit.
 | `agentic/osconnect/` (read-only OS inventory) | NOT_IMPLEMENTED | brand-new connector — squarely blocked by freeze | §5 |
 | Governed OS actions (service start/stop, allow-listed maintenance scripts) | NOT_IMPLEMENTED | new capability, higher risk (system mutation) — ask first | §5 |
 | IMAP/EWS, SIEM, direct-SMB connectors | NOT_IMPLEMENTED | new capability, large surface — hold | §5 |
-| Shared `connectors/base.py` ABC | NOT_IMPLEMENTED | premature — trigger condition (a third connector) hasn't happened; skip per YAGNI | §5 |
+| Shared `connectors/base.py` ABC | NOT_IMPLEMENTED | trigger condition has technically fired (`agentic/netconnect/` is a third connector, though read-only) but no extraction has happened; revisit rather than treat as still-hypothetical | §5 |
 | Wire `session-start-sync-check.sh` into `.claude/settings.json`'s `SessionStart` hooks | IMPLEMENTED 2026-09-04 (registered as the second SessionStart entry) | done — was low-risk and advisory-only as predicted | §6 |
 | `cve-triage` skill | NOT_IMPLEMENTED | net-new tooling, but fits an existing pattern (`dep-guard`/`verify-deps`) — reasonable low-risk candidate | §7 |
 | `release-cut` skill | NOT_IMPLEMENTED | net-new tooling — reasonable if releases are cut with any regularity | §7 |
