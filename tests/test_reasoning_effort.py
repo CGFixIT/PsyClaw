@@ -786,7 +786,9 @@ class TestNativeThroughputScript:
 
 
 # =============================================================================
-# 7. Guardrails (NeMo) -- routed through model_kwargs, loopback + Ollama only
+# 7. Guardrails (NeMo) -- reasoning_effort is a top-level OpenAI-compatible
+# parameter. NeMo 0.24's default framework rejects a nested model_kwargs key
+# (issue #1338). Loopback + Ollama only.
 # =============================================================================
 
 class _StubModel:
@@ -817,22 +819,25 @@ def _guardrails_cfg(**overrides):
 
 
 class TestGuardrailsModelParameters:
-    def test_reasoning_effort_lands_in_model_kwargs(self):
+    def test_reasoning_effort_lands_in_parameters(self):
         model = _StubModel()
         _apply_guardrails_config(_StubRailsConfig([model]), _guardrails_cfg())
-        assert model.parameters["model_kwargs"]["reasoning_effort"] == "none"
-        # The existing base_url wiring is untouched.
+        assert model.parameters["reasoning_effort"] == "none"
+        assert "model_kwargs" not in model.parameters
         assert model.parameters["base_url"] == "http://127.0.0.1:11434/v1"
 
-    def test_existing_model_kwargs_are_preserved(self):
+    def test_existing_model_kwargs_are_unpacked(self):
         model = _StubModel()
         model.parameters = {"model_kwargs": {"seed": 7}}
         _apply_guardrails_config(_StubRailsConfig([model]), _guardrails_cfg())
-        assert model.parameters["model_kwargs"] == {"seed": 7, "reasoning_effort": "none"}
+        assert model.parameters["seed"] == 7
+        assert model.parameters["reasoning_effort"] == "none"
+        assert "model_kwargs" not in model.parameters
 
-    def test_absent_setting_adds_no_model_kwargs(self):
+    def test_absent_setting_adds_no_reasoning_effort(self):
         model = _StubModel()
         _apply_guardrails_config(_StubRailsConfig([model]), _guardrails_cfg(reasoning_effort=None))
+        assert "reasoning_effort" not in (model.parameters or {})
         assert "model_kwargs" not in (model.parameters or {})
 
     def test_non_main_models_are_left_alone(self):

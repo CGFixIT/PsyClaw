@@ -121,6 +121,24 @@ def test_nvidia_check_benign_vs_injection_with_enabled_overlay(tmp_path: Path) -
         reset_config_cache()
 
 
+def test_get_cyclaw_guardrails_loads_through_enabled_overlay(tmp_path: Path) -> None:
+    """Production load path (not a bypass LLMRails(...) construction)."""
+    from guardrails.integration import get_cyclaw_guardrails
+
+    path = _write_enabled_overlay(tmp_path)
+    cfg = load_guardrails_config(str(path))
+    assert cfg.enabled is True
+    assert cfg.reasoning_effort == "none"
+    reset_rails_singleton()
+    try:
+        with loopback_only():
+            rails = get_cyclaw_guardrails(cfg)
+        assert rails is not None
+    finally:
+        reset_rails_singleton()
+        reset_config_cache()
+
+
 def test_offline_check_input_output_still_work_when_enabled(tmp_path: Path) -> None:
     path = _write_enabled_overlay(tmp_path)
     cfg = load_guardrails_config(str(path))
