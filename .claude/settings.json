@@ -24,6 +24,11 @@
             "type": "command",
             "command": "bash .claude/hooks/session-start-sync-check.sh",
             "statusMessage": "Pinning git identity + checking local/remote sync..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/fable-protocol-loader.sh",
+            "statusMessage": "Loading fable-protocol (skipped on Fable-tier models)..."
           }
         ]
       }

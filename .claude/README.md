@@ -60,11 +60,12 @@ All `*-refactor` skills follow the same seven-step cycle:
 ├── utility-prompts/       ← coordinator / session-title / tool-summary / next-action
 ├── commands/              ← reference command docs
 ├── tools/                 ← tool-usage reference docs
-├── hooks/                 ← session-start-sync-check.sh only; registered as the
-│                            second SessionStart hook since 2026-09-04. The other
-│                            live hooks (SessionStart persona loader, PreCompact,
-│                            SessionEnd) are inline commands in settings.json
-│                            pointing into .claude/skills/*
+├── hooks/                 ← session-start-sync-check.sh (second SessionStart hook
+│                            since 2026-09-04) and fable-protocol-loader.sh (third,
+│                            since 2026-09-06; model-gated). The other live hooks
+│                            (SessionStart persona loader, PreCompact, SessionEnd)
+│                            are inline commands in settings.json pointing into
+│                            .claude/skills/*
 ├── memory/                ← legacy memory location (live memory: docs/memories/)
 └── rules/                 ← project-specific rules (PROJECT_RULES.md; plain
                               Markdown, no frontmatter, applies repo-wide)
@@ -136,7 +137,7 @@ reachable as `/fable-protocol` and through its `description` trigger, and inject
 an 18KB skill into every prompt is cost the skill's own §7 warns about. **Lesson
 encoded:** the sync-check hook added the same day carries no `|| true`, because the
 script already always exits 0 and that tail is the thing that hid the last failure.
-The four registered hook *entries* now resolve to three distinct scripts:
+The five registered hook *entries* now resolve to four distinct scripts:
 `memory-orchestrator/orchestrate.py` is referenced twice (`PreCompact` and
 `SessionEnd`). Otherwise:
 no personal data (no usernames, absolute machine paths, or emails — keep it
@@ -148,6 +149,24 @@ an operator machine those two will surface hook errors; left as-is because
 hook edits are High tier (`CLAUDE.md` §7) and there is no recorded failure.
 The `SessionStart` sync-check added 2026-09-04 likewise has no `|| true` — that
 is deliberate, not an oversight (see the dangling-hook note above).
+
+**`fable-protocol-loader.sh` (third `SessionStart` hook, added 2026-09-06).**
+This is the replacement the 2026-09-04 note said was not being written, on a
+different trigger and with a gate. It injects `fable-protocol/SKILL.md` as
+`additionalContext` once per SessionStart (startup/resume/clear/compact), the
+same moment and mechanism as the persona loader, NOT per prompt — so the
+per-prompt cost that got the old `UserPromptSubmit` hook unwired does not
+return. It skips when the session model id contains `fable` or `mythos`: the
+protocol exists so a smaller model applies what Fable applies by default, and
+Fable gets it on demand via `/fable-protocol`. Why SessionStart and why a gate
+that can miss: verified against Claude Code 2.1.261's hook schema, SessionStart
+is the only event whose stdin JSON carries `model` (optional), and no event
+fires on a mid-session `/model` switch — so a switch to Sonnet/Opus after start
+is not re-gated; `CLAUDE.md` §10 tells the operator to run `/fable-protocol` by
+hand in that case. Absent/unknown model strings inject (fail-open on a cheap
+control). The script exits 0 unconditionally and keeps stdout JSON-only, with
+diagnostics on stderr; tested 2026-09-06 with sonnet/opus/fable/mythos/absent/
+malformed stdin.
 
 **Remote-environment env-var misconfiguration (root cause of the stray
 `C:\Users\...` directory).** The Claude Code remote execution environment for

@@ -851,7 +851,9 @@ not only here. Its later sections do document CyClaw architecture and settled
 decisions as a knowledge base, but carry no independent authority — `CLAUDE.md`
 and `config.yaml` remain the source of truth, and neither this skill's
 discipline layer nor its knowledge layer overrides the six invariants in §3.
-Read at session start in any of the owner's repos. See the skill file for the
+Read at session start in any of the owner's repos; in this repo the
+`fable-protocol-loader.sh` SessionStart hook does that automatically for every
+non-Fable model (§10). See the skill file for the
 full protocol (consolidated 2026-09-06 from a separate `fable-5.1-cc`
 companion skill, which no longer exists as its own file — its content is now
 this skill's §8 onward).
@@ -860,8 +862,8 @@ this skill's §8 onward).
 
 ## 10. Session Protocol
 
-**Start.** Two SessionStart hooks run: one injects the Python-coding-agent
-persona, and `session-start-sync-check.sh` (wired since 2026-09-04) pins the git
+**Start.** Three SessionStart hooks run: one injects the Python-coding-agent
+persona; `session-start-sync-check.sh` (wired since 2026-09-04) pins the git
 identity and reports local↔remote divergence without ever mutating — it never
 resets, rebases, pushes or deletes, and always exits 0. If it did not run, set the
 identity yourself before any commit:
@@ -870,6 +872,13 @@ identity yourself before any commit:
 git config user.email cyclaw-agent@users.noreply.github.com
 git config user.name "CyClaw Agent"
 ```
+
+The third, `fable-protocol-loader.sh` (wired 2026-09-06), injects
+`/fable-protocol` as session context unless the session model is Fable-tier
+(`fable`/`mythos` in the model id). It reads the model from the SessionStart
+hook's stdin JSON, the only hook event that carries one; a mid-session `/model`
+switch fires no hook, so after switching to Sonnet or Opus mid-session run
+`/fable-protocol` by hand. Absent or unrecognised model strings inject.
 
 Single source of truth: `utils/agent_identity.py`. Committer defaults are
 **driver-agnostic** (not Claude/Anthropic) because the agentic loop is often a
