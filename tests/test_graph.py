@@ -1175,6 +1175,14 @@ class TestNodeErrorRecovery:
         def generate(self, prompt, **kwargs):
             raise ClaudeServiceError("Anthropic 500")
 
+    class _SpyLLM:
+        def __init__(self) -> None:
+            self.called = False
+
+        def generate(self, prompt, **kwargs):
+            self.called = True
+            return "ok"
+
     def test_retrieve_node_rag_error_returns_safe_error_state(self):
         out = retrieve_node({"query": "anything"}, self._RaisingRetriever(), cfg={})
         assert out["retrieved_docs"] == []
@@ -1202,6 +1210,27 @@ class TestNodeErrorRecovery:
         assert out["answer"].startswith("[LLM Error:")
         assert "LM Studio down" in out["answer"]
         assert out["error"] == "LLM_SERVICE_ERROR: LM Studio down"
+
+    def test_offline_best_effort_node_refuses_non_loopback_url(self):
+        llm = self._SpyLLM()
+        cfg = {"models": {"local_llm": {"base_url": "https://api.x.ai/v1"}}}
+        out = offline_best_effort_node(
+            {"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg
+        )
+        assert not llm.called
+        assert out["answer_model"] == "offline-best-effort"
+        assert out["error"].startswith("ENDPOINT_TRUST")
+
+    def test_offline_best_effort_node_accepts_loopback_url(self):
+        llm = self._SpyLLM()
+        cfg = {"models": {"local_llm": {"base_url": "http://127.0.0.1:11434/v1"}}}
+        out = offline_best_effort_node(
+            {"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg
+        )
+        assert llm.called
+        assert out["answer"] == "ok"
+        assert out["answer_model"] == "offline-best-effort"
+        assert "error" not in out
 
     def test_grok_fallback_node_handles_grok_service_error(self):
         cfg = {"policy": {"fallback": {"send_local_context_to_grok": False}}}
@@ -1923,3 +1952,22 @@ class TestLLMIdentityMappings:
         identity = _llm_identity("offline-best-effort", cfg)
         assert identity["llm_model"] == "qwen-test"
         assert "offline best-effort local" in identity["llm"]
+
+
+@pytest.mark.parametrize("node,model", [(local_llm_node, "local"), (offline_best_effort_node, "offline-best-effort")])
+@pytest.mark.parametrize("url,hosts,allowed", [
+    ("http://[::1", [], False),
+    ("http://host.docker.internal:11434/v1", [], False),
+    ("http://host.docker.internal:11434/v1", ["host.docker.internal"], True),
+    ("https://api.x.ai/v1", ["host.docker.internal"], False),
+])
+def test_local_nodes_endpoint_trust(node, model, url, hosts, allowed):
+    llm = TestNodeErrorRecovery._SpyLLM()
+    cfg = {"models": {"local_llm": {"base_url": url, "trusted_hosts": hosts}}}
+    out = node({"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg)
+    assert llm.called is allowed
+    assert out["answer_model"] == model
+    if allowed:
+        assert "error" not in out
+    else:
+        assert out["error"].startswith("ENDPOINT_TRUST")

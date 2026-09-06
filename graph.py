@@ -92,7 +92,7 @@ from langgraph.graph import END, StateGraph
 
 from llm.client import ClaudeClient, GrokClient, LocalLLMClient
 from retrieval.hybrid_search import HybridRetriever
-from utils.endpoint_trust import EndpointTrustError, assert_loopback, assert_online_destination
+from utils.endpoint_trust import EndpointTrustError, assert_local_destination, assert_online_destination
 from utils.errors import RAGError
 from utils.external_pre_hook import run_pre_action_hook
 from utils.logger import audit_log, hash_query
@@ -579,7 +579,9 @@ Answer based STRICTLY on the retrieved context above. If the context is insuffic
     local_url = str((cfg.get("models") or {}).get("local_llm", {}).get("base_url") or "")
     if local_url:
         try:
-            assert_loopback(local_url)
+            assert_local_destination(
+                local_url, (cfg.get("models") or {}).get("local_llm", {}).get("trusted_hosts", [])
+            )
         except EndpointTrustError as exc:
             return {
                 "answer": f"[LLM Error: {exc}]",
@@ -867,6 +869,20 @@ Provide the best answer you can. Clearly note where you lack sufficient context.
 No local knowledge base context was available for this query.
 
 Provide the best general answer you can. Clearly note that your local knowledge base did not have relevant information for this query."""
+
+    local_url = str((cfg.get("models") or {}).get("local_llm", {}).get("base_url") or "")
+    if local_url:
+        try:
+            assert_local_destination(
+                local_url, (cfg.get("models") or {}).get("local_llm", {}).get("trusted_hosts", [])
+            )
+        except EndpointTrustError as exc:
+            return {
+                "answer": f"[LLM Error: {exc}]",
+                "answer_model": "offline-best-effort",
+                "answer_sources": [],
+                "error": f"ENDPOINT_TRUST: {exc}",
+            }
 
     answer, error = _generate_or_error(
         llm, prompt, label="LLM", query=query, generate_guard=generate_guard

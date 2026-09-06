@@ -20,7 +20,10 @@ class EndpointTrustError(ValueError):
 
 
 def hostname_of(url: str) -> str:
-    host = (urlparse(url).hostname or "").lower()
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        raise EndpointTrustError("malformed endpoint URL") from None
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
     return host
@@ -30,6 +33,19 @@ def assert_loopback(base_url: str) -> None:
     host = hostname_of(base_url)
     if host not in _LOOPBACK:
         raise EndpointTrustError(f"local LLM endpoint must be loopback, got {host!r}")
+
+
+def assert_local_destination(base_url: str, trusted_hosts: object = ()) -> None:
+    """Allow loopback or an explicitly trusted operator-owned model host."""
+    host = hostname_of(base_url)
+    if host in _LOOPBACK:
+        return
+    # Reject malformed lists rather than accidentally using substring matching.
+    if isinstance(trusted_hosts, (list, tuple)) and host and any(
+        isinstance(item, str) and host == item.lower() for item in trusted_hosts
+    ):
+        return
+    raise EndpointTrustError("local LLM endpoint is not loopback or an explicitly trusted host")
 
 
 def assert_online_destination(*, provider: str, base_url: str, confirmed: bool | None) -> None:
