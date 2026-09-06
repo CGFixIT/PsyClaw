@@ -20,6 +20,11 @@ reading the affected flow or testing the endpoint.
    python .claude/skills/invariant-guard/check_invariants.py
    ```
 
+   Read its actual core/out-of-band sets and node/edge checks. The current core
+   includes gate route modules, and I6 includes OpenTweet. A pass does not test
+   every endpoint-trust, auth, or telemetry behavior: pair it with relevant
+   `test_endpoint_trust.py`, `test_graph.py`, auth, or due-diligence regressions.
+
 3. Run the self-test when validating the guard itself:
 
    ```text

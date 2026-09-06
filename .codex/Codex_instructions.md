@@ -11,8 +11,9 @@ and the active CI workflows.
   substantive edits.
 - Keep progress updates short. State uncertainty and skipped checks plainly.
 - Preserve unrelated repo changes and use an isolated clone/worktree when
-  practical. Stop and ask only when they overlap the requested files or make
-  the target state unclear.
+  practical. An existing edit in a file the user asks to update is not by
+  itself a blocker: preserve its intent and inspect the diff. Clarify only if
+  the requested target state cannot be inferred.
 
 ## Risk Policy
 
@@ -28,8 +29,8 @@ When uncertain, choose the higher tier.
 
 ### Session And Branch Lifecycle
 
-1. Before creating a branch, committing, pushing, rebasing, or updating a PR,
-   fetch the remote base explicitly: `git fetch origin +refs/heads/main:refs/remotes/origin/main`.
+1. At session start and before publication/history changes, fetch the remote
+   base explicitly: `git fetch origin +refs/heads/main:refs/remotes/origin/main`.
 2. Start from fresh `origin/main`, never by resetting an unknown or dirty
    checkout. Use an isolated clone or worktree when the current checkout is
    not clean.
@@ -56,10 +57,17 @@ When uncertain, choose the higher tier.
    force-with-lease approval, wait for fresh CI, then recommend merge. If it did
    not move, record that no-op freshness check before recommending merge.
 
-Never force-push after a rebase without explicit user approval. Prefer local
+Never rewrite published history without authorization; an explicit request to
+rebase and push the affected PRs covers that operation. Do not ask again for
+an action already authorized. Use `--force-with-lease=<ref>:<observed-sha>` and
+stop if the remote has changed. When applying fixes to an existing PR, preserve
+its remote branch even when its prefix belongs to another driver. Prefer local
 `git` for branches, commits, rebases, and pushes; use GitHub tools for PR
-metadata, comments, and checks, and use `gh` only after verifying it is the
-real authenticated CLI.
+metadata and checks, and use `gh` only after verifying it is the real
+authenticated CLI. Do not post comments or messages to others without the
+user's authorization. Inspect `git config core.hooksPath` before attributing
+external hooks to this repo; host-specific stamp runners are not a universal
+tracked requirement.
 
 ### Multiple Related PRs (Claude CyClaw-Optimize Step 3.5)
 
@@ -83,7 +91,11 @@ agent instructions.
 ### PR Comment Apply-Fixes Boundary
 
 `.github/workflows/codex-apply-fixes.yml` is an owner-gated write path for a
-specific qualifying bot comment. The phrases `@codex apply fixes` and
+specific qualifying bot comment. Distinguish its workflow result from any
+separate hosted Codex task: inspect the actual remote head and diff. A task's
+summary claiming a local commit or attempted PR does not prove publication.
+Use per-PR comment/review reads for review-fix tasks and classify validity
+before applying changes to the corresponding branch. The phrases `@codex apply fixes` and
 `@openai-code-agent apply fixes` are not broad authorization: inspect the
 resulting PR-head diff, rerun/review CI, and merge only through the normal human
 decision. Advisory `@codex` requests remain read-only.

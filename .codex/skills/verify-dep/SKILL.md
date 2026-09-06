@@ -21,6 +21,8 @@ These are selected profiles, not three files that must contain identical text:
 | `environment.yml` | Conda base/test/dev profile with documented Conda-only FastAPI and Starlette exceptions. |
 | Platform installers | Linux/Windows install `torch==...+cpu` from the PyTorch CPU index; macOS installs plain Torch then filters Linux-only Torch/index lines from copied manifests. |
 
+The root `environment.yml` is the Conda profile. The same basename under
+`.github/workflows/` is a workflow_dispatch no-op and is included in actionlint.
 `constraints.txt` is a version ceiling, not an install list. Do not add a fake
 `torch-cpu` extra or require all profiles to be byte-for-byte equal.
 

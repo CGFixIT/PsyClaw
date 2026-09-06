@@ -9,6 +9,11 @@ Use the maintained probe corpus and runner under
 `.claude/skills/injection-redteam/`. A flagged `open_finding` is a known gap;
 an unflagged bypass is a regression. Never delete a probe to make the run pass.
 
+Keep probes local with synthetic content. HTTP `/query` and retrieval-only MCP
+both sanitize input; source scanning is not proof that every entry point invokes
+the scanner. Test the relevant route and do not send private corpus or prompts
+to an external model to judge a bypass.
+
 ## Workflow
 
 1. Read `config.yaml`, `utils/sanitizer.py`, the probe corpus, and the threat

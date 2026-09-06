@@ -40,8 +40,11 @@ Repository instructions and explicit user direction take precedence.
 Before committing, inspect the full diff and run relevant local checks. After
 push or draft PR creation, distinguish committed, pushed, PR, CI, and
 mergeability states; monitor CI to a terminal state and fix branch-caused
-failures. Never push to `main`, force-push, expose secrets, or make destructive
-remote changes without explicit authorization.
+failures. Match test results to their SHA and distinguish skipped/unfinished
+runs from passes. A bot summary is not evidence that a commit was pushed.
+Never push to `main`, rewrite remote history, or make destructive remote changes
+without authorization; preserve authorization already given for the same task.
+Use exact expected-SHA leases for authorized rebases. Never expose secrets.
 
 Stop when the evidence does not justify a change. A truthful no-change result
 is preferable to speculative code or a low-value PR.

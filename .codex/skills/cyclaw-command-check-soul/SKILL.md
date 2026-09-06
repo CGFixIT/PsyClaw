@@ -10,7 +10,7 @@ Use this skill to verify `data/personality/soul.md` presence, readability, and
 integrity metadata. Soul content is governance-sensitive; inspect metadata by
 default and avoid modifying the file.
 
-Run commands only when the user asks to perform the check. Never update a stored
+Run this read-only check when requested or needed by an authorized verification task. Never update a stored
 baseline hash or mutate `soul.md` without an explicit human reason.
 
 ## Workflow
@@ -21,8 +21,10 @@ baseline hash or mutate `soul.md` without an explicit human reason.
    default-initialize the documented soul at startup, but do not silently
    create custom soul content during a read-only check.
 4. Compute the current SHA-256 and file size.
-5. Inspect `utils/personality.py` and related tests for any stored baseline hash
-   or expected integrity value.
+5. Resolve configured paths/backend and inspect `utils/personality.py` and
+   `utils/personality_db.py` for the stored baseline. The latest stored version
+   is the integrity reference; do not invent a source-code hash constant or
+   instantiate a manager that self-heals/writes during a read-only check.
 6. Validate that the file is non-empty and valid UTF-8.
 7. Compare the current hash to the baseline when one exists.
 

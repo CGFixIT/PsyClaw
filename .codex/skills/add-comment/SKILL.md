@@ -26,17 +26,18 @@ readability request into a refactor.
 Run from the repository root:
 
 ```text
-ruff check --select E,F,I,B,C4,UP,S .
+python -m ruff check --select E,F,I,B,C4,UP,S <touched Python files>
 python -m py_compile <touched Python files>
-python .claude/skills/invariant-guard/check_invariants.py
-pytest tests/ -q --tb=short -p no:cacheprovider
 git diff --check
 ```
 
-Use the smallest useful test command first, then expand for core-path changes.
-If dependencies or a platform are unavailable, report the exact skipped gate.
+Compare the before/after Python AST when proving a Python edit is comment-only.
+Run the invariant checker when describing security-sensitive behavior. A proven
+comment-only edit does not require an unrelated full runtime suite. Report
+unavailable checks explicitly.
 
 ## Git boundary
 
-Keep the branch focused, use a `docs:` commit, and open a draft PR. Never edit
-or push `main`; do not include unrelated cleanup or code movement.
+Keep the branch focused. Commit/publish only within the user's requested scope;
+use the repository template for authorized draft PRs. Never push `main` or
+include unrelated cleanup or code movement.

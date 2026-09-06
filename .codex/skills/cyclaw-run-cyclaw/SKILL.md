@@ -18,8 +18,10 @@ active environment requires it.
 3. Check `data/personality/soul.md` for governance/identity drift. CyClaw will
    default-initialize the documented file at startup if it is absent; never
    overwrite it or invent custom soul content without an explicit human reason.
-4. Set `GROK_API_KEY` to a non-secret dummy value for offline checks in the
-   active shell. Do not enable Grok or Claude in `config.yaml`.
+4. Use dummy credentials only for isolated mock tests; do not overwrite the
+   operator's environment for a requested live run. Hybrid and both providers
+   already ship enabled. Routine verification uses mocked provider HTTP and
+   `user_confirmed_online=false`, preserving shipped configuration.
 
 ## Index And Start
 
@@ -32,10 +34,14 @@ python -m retrieval.indexer
 Start the loopback gateway:
 
 ```bash
-python -m uvicorn gate:app --host 127.0.0.1 --port 8787
+python gate.py
 ```
 
-The installed `cyclaw-index` and `cyclaw-server` entry points are equivalent.
+`cyclaw-index` invokes the indexer; `cyclaw-server` invokes `gate.main`.
+Direct `uvicorn gate:app` imports the ASGI application but skips `main()`'s
+startup/bind checks, so do not call it equivalent to the canonical launcher.
+For container-host models, follow `docs/DOCKER.md` and explicit `trusted_hosts`;
+never silently loosen destination checks to make a smoke test pass.
 Do not bind to `0.0.0.0` without an explicit deployment request and security
 review.
 
