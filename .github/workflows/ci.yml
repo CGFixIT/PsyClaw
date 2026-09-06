@@ -53,7 +53,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Same skip as trivy.yml: docs/.claude-only PRs cannot change the image.
+      # Docs-only PRs cannot change the image. Do not skip .claude/: Dockerfile
+      # COPY . . and .dockerignore does not exclude that tree, so skill scripts
+      # land in the image.
       # Push/schedule still always builds (EVENT_NAME != pull_request).
       - name: Detect image-relevant changes
         id: changes
@@ -64,7 +66,7 @@ jobs:
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "docker_changed=true" >> "$GITHUB_OUTPUT"
           else
-            non_docs=$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -vE '^(docs/|\.claude/)' || true)
+            non_docs=$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -vE '^docs/' || true)
             if [ -n "$non_docs" ]; then
               echo "docker_changed=true" >> "$GITHUB_OUTPUT"
             else
