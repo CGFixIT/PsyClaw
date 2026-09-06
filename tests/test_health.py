@@ -547,9 +547,7 @@ class TestCheckAll:
             pinged.append(url)
             return _OKResp()
 
-        import llm.client as llm_client
-
-        monkeypatch.setattr(llm_client, "_probe_openai_models", probe)
+        monkeypatch.setattr("llm.client._probe_openai_models", probe)
         monkeypatch.setattr(health, "_http_get", record)
         statuses = health.check_all(cfg_path)
         local = next(s for s in statuses if s.name in {"ollama", "local_llm"})
