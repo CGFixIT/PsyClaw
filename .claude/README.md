@@ -111,8 +111,11 @@ cannot drift apart in substance. Five commands are standalone by design and
 have no skill folder (`/audit`, `/check-soul`, `/conversation-summary`,
 `/run`, `/status`) — they are short inline procedures, not skills.
 2026-08-11: added the two missing wrappers (`config-guard`, `dep-guard`).
-2026-09-04: added `fable-5.1-cc`, the last skill that shipped without one. The
-wrapper set now covers every skill again — verify with
+2026-09-04: added `fable-5.1-cc`, the last skill that shipped without one.
+2026-09-06: `fable-5.1-cc` was consolidated into `fable-protocol` (its content
+is now that skill's §8 onward) and deleted, wrapper and all — see
+`fable-protocol/SKILL.md` §11. The wrapper set still covers every skill —
+verify with
 `comm -23 <(ls .claude/skills | sort) <(ls .claude/commands | sed 's/\.md$//' | sort)`,
 which must print nothing.
 
