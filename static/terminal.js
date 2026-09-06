@@ -336,6 +336,24 @@ function describeQueryError(err) {
   return { text: (code && ERROR_COPY[code]) || message, code, message };
 }
 
+function describeAnswerRoute(modelUsed, llmModel) {
+  // model_used is the stable role vocabulary (metrics.py buckets on it).
+  // Only the four answer roles get a sentence; blocked / denied / unavailable
+  // / empty / unknown return null so the meta row never claims a model answered.
+  switch (modelUsed) {
+    case 'local':
+      return `answered from your documents · ${llmModel || 'the local model'}`;
+    case 'offline-best-effort':
+      return `not in your documents · answered locally by ${llmModel || 'the local model'} from its own knowledge`;
+    case 'grok':
+      return `not in your documents · sent to ${llmModel || 'Grok'}`;
+    case 'claude':
+      return `not in your documents · sent to ${llmModel || 'Claude'}`;
+    default:
+      return null;
+  }
+}
+
 function describeApiKeyError(err, fallback) {
   const message = extractErrorMessage(err, fallback);
   if (message.indexOf('CYCLAW_API_KEY not set') !== -1 || message.indexOf('Soul mutation disabled') !== -1) {
@@ -358,7 +376,7 @@ function setSoulStatus(message, tone = '') {
 // retrieval.indexer" -- a CLI command, in a browser, to someone who may not
 // have a terminal open. /health has always carried index_ready; the console
 // just never read it. Now the empty state becomes an actionable panel instead.
-const indexBuild = { state: 'idle', timer: null, misses: 0 };
+const indexBuild = { state: 'idle', timer: null, misses: 0, elapsed: null };
 const INDEX_POLL_MS = 1500;
 // A dropped poll is not a failed build, so the poll retries -- but it needs a
 // ceiling. Without one, a gateway that dies mid-build leaves the tab hammering
@@ -366,6 +384,15 @@ const INDEX_POLL_MS = 1500;
 // library", telling the operator nothing is wrong. 20 x 1.5s = ~30s of silence
 // before we admit we've lost contact, which comfortably outlasts a restart.
 const INDEX_POLL_MAX_MISSES = 20;
+
+function formatElapsed(seconds) {
+  // GET /index/status returns elapsed_sec as a nullable number. Missing,
+  // non-numeric, or negative values stay absent -- never NaN or a fake 0.
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  const whole = Math.floor(seconds);
+  if (whole < 60) return `${whole}s`;
+  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, '0')}s`;
+}
 
 function renderFirstRun(data) {
   const emptyState = document.getElementById('emptyState');
@@ -401,9 +428,11 @@ function paintFirstRun(panel, data) {
 
   if (indexBuild.state === 'running') {
     title.textContent = 'Building your library…';
+    const elapsed = formatElapsed(indexBuild.elapsed);
+    const elapsedBit = elapsed ? ` Elapsed ${elapsed}.` : '';
     body.textContent = indexBuild.total
-      ? `${indexBuild.done} of ${indexBuild.total} sections indexed.`
-      : 'Reading your documents. This can take a few minutes the first time.';
+      ? `${indexBuild.done} of ${indexBuild.total} sections indexed.${elapsedBit}`
+      : `Reading your documents. This can take a few minutes the first time.${elapsedBit}`;
     panel.append(title, body);
     return;
   }
@@ -441,6 +470,7 @@ async function startIndexBuild() {
   indexBuild.state = 'running';
   indexBuild.done = 0;
   indexBuild.total = 0;
+  indexBuild.elapsed = null;
   indexBuild.error = null;
   indexBuild.misses = 0;   // Try again must not inherit the previous run's streak
   paintHealthStatus();
@@ -481,6 +511,9 @@ function pollIndexStatus() {
       indexBuild.misses = 0;   // a reachable server clears the miss streak
       indexBuild.done = s.chunks_done || 0;
       indexBuild.total = s.chunks_total || 0;
+      indexBuild.elapsed = Number.isFinite(s.elapsed_sec) && s.elapsed_sec >= 0
+        ? s.elapsed_sec
+        : null;
       if (s.state === 'running') {
         paintHealthStatus();
         renderFirstRun(lastHealth);
@@ -533,34 +566,35 @@ function describeHealth(data) {
   const down = Object.keys(services).filter(
     (k) => services[k] && services[k].healthy === false
   );
+  const ollamaDown = down.includes('ollama');
 
   if (indexBuild.state === 'running') {
     return {
-      text: 'Building your library…', tone: 'warn',
+      text: 'Building your library…', tone: 'warn', ollamaDown: false,
       detail: 'Reading your documents and making them searchable.'
     };
   }
   if (d.index_ready === false) {
     return {
-      text: 'No library yet', tone: 'warn',
+      text: 'No library yet', tone: 'warn', ollamaDown: false,
       detail: 'CyClaw has no searchable copy of your documents yet. Build one below.'
     };
   }
-  if (down.includes('ollama')) {
+  if (ollamaDown) {
     return {
-      text: "Local AI engine isn't running", tone: 'warn',
+      text: "Local AI engine isn't running", tone: 'warn', ollamaDown: true,
       detail: 'Start Ollama (ollama serve) and CyClaw can write answers again. '
             + 'Your documents are still searchable in the meantime.'
     };
   }
   if (down.length) {
     return {
-      text: `${down[0]} unavailable`, tone: 'warn',
+      text: `${down[0]} unavailable`, tone: 'warn', ollamaDown: false,
       detail: (services[down[0]] && services[down[0]].error) || 'This service is not responding.'
     };
   }
   return {
-    text: 'Ready', tone: 'ok',
+    text: 'Ready', tone: 'ok', ollamaDown: false,
     detail: 'Your documents are searchable and the local AI engine is running.'
   };
 }
@@ -569,11 +603,44 @@ function describeHealth(data) {
 // the 15s /health poll, and local build-state transitions that must show up
 // immediately. Without this, clicking Build left the chip reading "No library
 // yet" for up to 15 seconds while the panel beside it already said "Building".
-function paintHealthStatus() {
+function paintHealthDisclosure(detail, ollamaDown, jsonLabel, jsonText) {
+  // Every server-derived value is assigned via textContent. The health
+  // payload is JSON from /health; writing it with innerHTML would turn a
+  // future field (corpus_path, error strings) into an XSS sink.
+  const detailEl = document.getElementById('healthDetailText');
+  const jsonEl = document.getElementById('healthJson');
+  const labelEl = document.getElementById('healthJsonLabel');
+  const ollamaHelp = document.getElementById('ollamaHelp');
+  if (detailEl) detailEl.textContent = detail;
+  if (labelEl) labelEl.textContent = jsonLabel;
+  if (jsonEl) jsonEl.textContent = jsonText;
+  if (ollamaHelp) ollamaHelp.hidden = !ollamaDown;
+}
+
+function paintHealthStatus(opts) {
+  const unreachable = opts && opts.unreachable;
+  if (unreachable) {
+    statusDot.className = 'status-dot offline';
+    statusText.textContent = "Can't reach CyClaw";
+    statusText.title = 'The gateway is not responding. Is it still running?';
+    paintHealthDisclosure(
+      'The gateway is not responding. Is it still running?',
+      false,
+      lastHealth ? 'Last successful health response' : 'No health response yet',
+      lastHealth ? JSON.stringify(lastHealth, null, 2) : 'Gateway unreachable.'
+    );
+    return;
+  }
   const health = describeHealth(lastHealth);
   statusDot.className = `status-dot ${health.tone}`;
   statusText.textContent = health.text;
   statusText.title = health.detail;
+  paintHealthDisclosure(
+    health.detail,
+    health.ollamaDown,
+    lastHealth ? 'Latest health response' : 'No health response yet',
+    lastHealth ? JSON.stringify(lastHealth, null, 2) : 'No health response yet.'
+  );
 }
 
 async function checkHealth() {
@@ -609,9 +676,7 @@ async function checkHealth() {
     renderFirstRun(data);
     healthBackoffMs = HEALTH_BASE_INTERVAL;
   } catch (e) {
-    statusDot.className = 'status-dot offline';
-    statusText.textContent = "Can't reach CyClaw";
-    statusText.title = 'The gateway is not responding. Is it still running?';
+    paintHealthStatus({ unreachable: true });
     healthBackoffMs = Math.min(healthBackoffMs * 2, HEALTH_MAX_INTERVAL);
   }
   scheduleHealthCheck();
@@ -830,18 +895,25 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null, confir
       return;
     }
 
-    // model stays the ROLE ("local" / "offline-best-effort" / "grok" / "claude")
-    // -- that's the one signal telling a vault hit from a best-effort guess
-    // from an escalation. tag is additive: the concrete model.yaml name that
-    // actually answered, so "local" doesn't read as a black box. Omitted when
-    // null (the answer_model has no model identity, e.g. guardrail-blocked).
-    const meta = [
-      { k: 'model', v: data.model_used },
-      ...(data.llm_model ? [{ k: 'tag', v: data.llm_model }] : []),
-      { k: 'mode', v: data.retrieval_mode },
-      { k: 'hits', v: data.hit_count },
-      { k: 'time', v: `${elapsed}ms` }
-    ];
+    // model_used stays the ROLE ("local" / "offline-best-effort" / "grok" /
+    // "claude" / blocked paths). The default meta row translates those roles
+    // into the plan's plain-language route sentence; raw fields stay available
+    // when advanced mode is on. Blocked/unavailable roles return no sentence
+    // so we never claim a model answered.
+    const route = describeAnswerRoute(data.model_used, data.llm_model);
+    const meta = [];
+    if (route) {
+      meta.push({ k: 'route', v: route });
+    } else if (data.model_used) {
+      meta.push({ k: 'model', v: data.model_used });
+    }
+    if (advancedMode) {
+      if (route) meta.push({ k: 'model', v: data.model_used });
+      if (data.llm_model) meta.push({ k: 'tag', v: data.llm_model });
+      meta.push({ k: 'mode', v: data.retrieval_mode });
+      meta.push({ k: 'hits', v: data.hit_count });
+    }
+    meta.push({ k: 'time', v: `${elapsed}ms` });
     const answerEl = document.getElementById(addEntry('answer', 'ANSWER', data.answer, meta));
     if (answerEl && data.sources && data.sources.length > 0) {
       addSources(answerEl, data.sources);
