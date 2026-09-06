@@ -89,6 +89,10 @@ def register_agent_routes(
         # (issue #1337: POST /push on an all-zero run id returned 200 + ok=true).
         if payload.get("ok") is not True:
             return False
+        # A real JSON record (status/decide/push) can quote this banner in a
+        # pending CyClaw diff. parsed is null only for the non-JSON no-op.
+        if payload.get("parsed") is not None:
+            return False
         stdout = payload.get("stdout") or ""
         if not isinstance(stdout, str):
             return False

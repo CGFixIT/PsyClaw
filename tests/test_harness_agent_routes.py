@@ -683,6 +683,36 @@ def test_disabled_layer_fail_closes_on_real_repo_routes(cfg, monkeypatch, method
     assert "disabled" in detail["message"]
 
 
+def test_disabled_banner_inside_a_parsed_record_is_not_a_disabled_layer(cfg, monkeypatch):
+    """A pending CyClaw diff can quote the CLI banner. That is still a real run.
+
+    cmd_real_repo_run_status dumps the candidate diff into stdout JSON. A
+    change that touches _disabled_noop contains the banner phrase. Banner
+    detection must require parsed is null, or status/approve of that run
+    would 409 AGENTIC_DISABLED while the layer is on.
+    """
+    record = {
+        "run_id": _UNKNOWN_RUN_ID,
+        "status": "pending_decision",
+        "diff": 'def _disabled_noop():\n    _heading("Agentic layer disabled")\n',
+    }
+
+    def _quoted(action: str, **_kwargs):
+        return SimpleNamespace(to_dict=lambda: {
+            "subsystem": "agentic", "action": action, "exit_code": 0, "ok": True, "label": "ok",
+            "stdout": record["diff"], "stderr": "", "parsed": record,
+        })
+
+    monkeypatch.setattr(harness_server, "run_agentic_op", _quoted)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    resp = client.get(f"/api/agent/runs/{_UNKNOWN_RUN_ID}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["parsed"]["status"] == "pending_decision"
+
+
 # --- status / decision plumbing ---------------------------------------------
 
 
