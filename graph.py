@@ -868,6 +868,18 @@ No local knowledge base context was available for this query.
 
 Provide the best general answer you can. Clearly note that your local knowledge base did not have relevant information for this query."""
 
+    local_url = str((cfg.get("models") or {}).get("local_llm", {}).get("base_url") or "")
+    if local_url:
+        try:
+            assert_loopback(local_url)
+        except EndpointTrustError as exc:
+            return {
+                "answer": f"[LLM Error: {exc}]",
+                "answer_model": "offline-best-effort",
+                "answer_sources": [],
+                "error": f"ENDPOINT_TRUST: {exc}",
+            }
+
     answer, error = _generate_or_error(
         llm, prompt, label="LLM", query=query, generate_guard=generate_guard
     )

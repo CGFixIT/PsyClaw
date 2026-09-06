@@ -1175,6 +1175,14 @@ class TestNodeErrorRecovery:
         def generate(self, prompt, **kwargs):
             raise ClaudeServiceError("Anthropic 500")
 
+    class _SpyLLM:
+        def __init__(self) -> None:
+            self.called = False
+
+        def generate(self, prompt, **kwargs):
+            self.called = True
+            return "ok"
+
     def test_retrieve_node_rag_error_returns_safe_error_state(self):
         out = retrieve_node({"query": "anything"}, self._RaisingRetriever(), cfg={})
         assert out["retrieved_docs"] == []
@@ -1202,6 +1210,27 @@ class TestNodeErrorRecovery:
         assert out["answer"].startswith("[LLM Error:")
         assert "LM Studio down" in out["answer"]
         assert out["error"] == "LLM_SERVICE_ERROR: LM Studio down"
+
+    def test_offline_best_effort_node_refuses_non_loopback_url(self):
+        llm = self._SpyLLM()
+        cfg = {"models": {"local_llm": {"base_url": "https://api.x.ai/v1"}}}
+        out = offline_best_effort_node(
+            {"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg
+        )
+        assert not llm.called
+        assert out["answer_model"] == "offline-best-effort"
+        assert out["error"].startswith("ENDPOINT_TRUST")
+
+    def test_offline_best_effort_node_accepts_loopback_url(self):
+        llm = self._SpyLLM()
+        cfg = {"models": {"local_llm": {"base_url": "http://127.0.0.1:11434/v1"}}}
+        out = offline_best_effort_node(
+            {"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg
+        )
+        assert llm.called
+        assert out["answer"] == "ok"
+        assert out["answer_model"] == "offline-best-effort"
+        assert "error" not in out
 
     def test_grok_fallback_node_handles_grok_service_error(self):
         cfg = {"policy": {"fallback": {"send_local_context_to_grok": False}}}
