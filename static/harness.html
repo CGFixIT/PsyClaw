@@ -564,6 +564,11 @@ async function api(path, method, body, timeoutMs) {
     if (typed && typed.code === 'UNAUTHORIZED' && typed.details && typed.details.reason === 'key_not_configured') {
       msg += '\nThe harness server was started without CYCLAW_API_KEY in its environment. Set it in the shell that launches the harness and restart; typing it here only works when the server already has the same key configured.';
     }
+    if (code === 'CHAT_BUSY') {
+      msg += typed && typed.details && typed.details.cancel
+        ? '\nA local model turn is still running. Type /loop stop to abort it, or wait for the current turn to finish.'
+        : '\nA local model turn is still running.';
+    }
     if (code === 'CROSS_ORIGIN_BLOCKED' || code === 'CROSS_SITE_BLOCKED') {
       msg += '\nBookmark and fetch the same host, scheme, and port. localhost and 127.0.0.1 are different browser origins. Open http://127.0.0.1:8790/ (use your configured harness port), not file://.';
     }
@@ -1595,6 +1600,15 @@ function requestLoopStop(reason) {
   api('/api/chat/cancel', 'POST').catch(function () { /* best-effort Metal release */ });
   stopLoop(reason);
 }
+
+window.addEventListener('beforeunload', function () {
+  if (!inflightChat) return;
+  const headers = {};
+  const key = apiKeyInput ? apiKeyInput.value.trim() : '';
+  if (key) headers['Authorization'] = 'Bearer ' + key;
+  if (CSRF_TOKEN) headers['X-CyClaw-CSRF'] = CSRF_TOKEN;
+  fetch('/api/chat/cancel', { method: 'POST', headers: headers, keepalive: true, credentials: 'same-origin' }).catch(function () {});
+});
 
 async function sendChat(text, asLoop) {
   user(text);

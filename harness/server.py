@@ -363,11 +363,16 @@ class GenerationGate:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self.owner = ""
 
-    def claim(self) -> bool:
-        return self._lock.acquire(blocking=False)
+    def claim(self, owner: str = "") -> bool:
+        if not self._lock.acquire(blocking=False):
+            return False
+        self.owner = owner
+        return True
 
     def release(self) -> None:
+        self.owner = ""
         if self._lock.locked():
             try:
                 self._lock.release()
@@ -1376,16 +1381,28 @@ def create_app(
                 _release_loop_inflight(session.session_id)
                 raise _err(_HTTP_FORBIDDEN, exc) from exc
 
-        if not generation_gate.claim():
+        if not generation_gate.claim("chat"):
             # _guard_loop_turn already claimed loop_inflight; drop it here so
             # a 409 CHAT_BUSY cannot pin the session for _LOOP_INFLIGHT_TTL_SEC.
             if req.loop:
                 _release_loop_inflight(session.session_id)
+            details: dict[str, object] = {
+                "session_id": session.session_id,
+                "timeout_sec": int(
+                    getattr(client, "_timeout_sec", DEFAULT_CHAT_TIMEOUT_SEC)
+                ),
+            }
+            # /api/chat/cancel only aborts HarnessChatClient. An agent run
+            # that shares the backend also holds this gate and is not
+            # cancelled by that route.
+            if generation_gate.owner == "chat":
+                details["cancel"] = "/api/chat/cancel"
             raise _err(
                 _HTTP_CONFLICT,
                 AgenticError(
                     "a local model turn is already running",
                     code="CHAT_BUSY",
+                    details=details,
                 ),
             )
         try:
@@ -1428,9 +1445,9 @@ def create_app(
     def cancel_chat() -> dict:
         """Drop the in-flight Ollama POST so /loop stop frees Metal.
 
-        Closing the shared httpx client aborts the blocked socket; chat()
-        then raises HarnessLLMError and the generation gate releases in
-        finally. Idempotent when nothing is running.
+        abort_in_flight shuts down the blocked socket (close() alone does
+        not); chat() then raises HarnessLLMError and the generation gate
+        releases in finally. Idempotent when nothing is running.
         """
         abort = getattr(client, "abort_in_flight", None)
         if callable(abort):

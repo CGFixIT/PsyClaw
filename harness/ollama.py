@@ -15,11 +15,17 @@ rather than quietly sending prompts to a remote host.
 from __future__ import annotations
 
 import logging
+import os
+import socket
+import struct
+import threading
+from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
 
+from harness.chat_cancel import arm_cancel_reads
 from utils.errors import AgenticError
 
 logger = logging.getLogger("cyclaw.harness.ollama")
@@ -30,6 +36,10 @@ _ERROR_BODY_PREVIEW = 300
 # Keep missing-key/direct-construction behavior aligned with the shipped 27B
 # local-model budget. Explicit config values still override this fallback.
 DEFAULT_CHAT_TIMEOUT_SEC = 720.0
+# linger-on, timeout 0: abort() sends RST so a Darwin recv() in another
+# thread actually returns. shutdown()+close() alone left the hung POST
+# blocked on macos-latest CI (join(2) still alive).
+_LINGER_RST = struct.pack("ii", 1, 0)
 
 
 class HarnessLLMError(AgenticError):
@@ -47,8 +57,65 @@ class ChatResult:
     completion_tokens: int
 
 
-def _is_loopback(url: str) -> bool:
-    return (urlparse(url).hostname or "") in _LOOPBACK_HOSTS
+def _inflight_socket(conn: object) -> object:
+    inner = getattr(conn, "_connection", None)
+    stream = getattr(inner, "_network_stream", None)
+    sock = getattr(stream, "_sock", None)
+    if sock is not None:
+        return sock
+    # Bandit B610 matches any call named extra() as Django QuerySet.extra.
+    get_extra_info = getattr(stream, "get_extra_info", None)
+    return get_extra_info("socket") if callable(get_extra_info) else None
+
+
+def _yank_socket_fd(sock: object) -> None:
+    """RST + close the fd so Darwin's blocked recv() returns.
+
+    detach() first so later sock.close() / GC cannot close a recycled fd.
+    """
+    with suppress(OSError, AttributeError, TypeError):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _LINGER_RST)
+    with suppress(OSError, AttributeError):
+        sock.shutdown(socket.SHUT_RDWR)
+    try:
+        fd = sock.fileno()
+    except (OSError, AttributeError, TypeError):
+        fd = -1
+    detach = getattr(sock, "detach", None)
+    if callable(detach):
+        with suppress(OSError, AttributeError):
+            detach()
+    if fd >= 0:
+        with suppress(OSError):
+            os.close(fd)
+    with suppress(OSError, AttributeError):
+        sock.close()
+
+
+def _shutdown_inflight_sockets(client: httpx.Client) -> None:
+    """Force-close TCP sockets of any in-flight request on ``client``.
+
+    ``httpx.Client.close()`` does not abort an active POST (httpx 0.28.1 /
+    httpcore). Without this, ``/api/chat/cancel`` reports cancelled while
+    ``GenerationGate`` stays held until the read timeout
+    (``models.local_llm.timeout_sec``, shipped 720s). Darwin also ignores a
+    cross-thread ``shutdown()``+``close()`` on a blocked ``recv()``; an
+    ``SO_LINGER`` RST plus closing the fd is the fast path. Sliced reads in
+    ``harness.chat_cancel`` still abort if the socket cannot be found.
+    """
+    transport = getattr(client, "_transport", None)
+    pool = getattr(transport, "_pool", None)
+    connections = getattr(pool, "connections", None) or getattr(pool, "_connections", None)
+    if not connections:
+        return
+    for conn in list(connections):
+        sock = _inflight_socket(conn)
+        if sock is not None:
+            _yank_socket_fd(sock)
+        closer = getattr(conn, "close", None)
+        if callable(closer):
+            with suppress(OSError, AttributeError, RuntimeError):
+                closer()
 
 
 def _token_count(raw_count: object) -> int:
@@ -106,7 +173,7 @@ class HarnessChatClient:
         reasoning_effort: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if not _is_loopback(base_url):
+        if (urlparse(base_url).hostname or "") not in _LOOPBACK_HOSTS:
             raise HarnessLLMError(
                 "harness chat only targets loopback model servers",
                 details={"base_url": base_url},
@@ -120,24 +187,31 @@ class HarnessChatClient:
         self.reasoning_effort = reasoning_effort
         self._timeout_sec = timeout_sec
         self._transport = transport
-        self._client = httpx.Client(timeout=timeout_sec, transport=transport, trust_env=False)
+        self._cancel = threading.Event()
+        self._client = self._build_client()
 
     def close(self) -> None:
+        self._cancel.set()
         self._client.close()
 
     def abort_in_flight(self) -> None:
-        """Close the current HTTP client (drops an in-flight POST) and open a fresh one.
+        """Abort an in-flight Ollama POST and open a fresh client.
 
-        /loop stop on a local 27b would otherwise wait for the current
-        completion (minutes) before Metal is free. Recreate rather than
-        reuse: httpx.Client.close() is terminal.
+        ``Client.close()`` is terminal and does not interrupt a blocked
+        POST, so the live sockets are shut down first. Recreate rather
+        than reuse the closed client. Darwin also needs the sliced-read
+        wrapper: SHUT_RDWR alone does not wake a timed recv there.
         """
         old = self._client
-        self._client = httpx.Client(
-            timeout=self._timeout_sec,
-            transport=self._transport,
-            trust_env=False,
-        )
+        old_cancel = self._cancel
+        # Publish the replacement before waking the blocked POST. Shutdown
+        # unblocks chat(), whose finally can drop GenerationGate before
+        # old.close() returns. A retry that started on old would then die
+        # in close().
+        self._cancel = threading.Event()
+        self._client = self._build_client()
+        old_cancel.set()
+        _shutdown_inflight_sockets(old)
         old.close()
 
     def chat(
@@ -194,3 +268,12 @@ class HarnessChatClient:
             )
             raise HarnessLLMError(f"model server returned HTTP {resp.status_code}")
         return _parse_chat_response(resp, use_model)
+
+    def _build_client(self) -> httpx.Client:
+        client = httpx.Client(
+            timeout=self._timeout_sec,
+            transport=self._transport,
+            trust_env=False,
+        )
+        arm_cancel_reads(client, self._cancel)
+        return client
