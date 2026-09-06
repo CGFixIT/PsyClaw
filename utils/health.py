@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
+from .endpoint_trust import EndpointTrustError, assert_local_destination
 from .errors import HealthStatus
 
 _cfg_cache: dict[str, tuple[dict, float]] = {}
@@ -199,13 +200,22 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         local_headers = None
 
     if llm_base is not None:
-        results.append(_ping(
-            f"{llm_base.rstrip('/')}/models",
-            local_name,
-            headers=local_headers,
-            expect_model=local_model if local_model else None,
-            timeout=_health_probe_timeout(llm_base),
-        ))
+        # Same destination allowlist as graph.py generate: /health is
+        # unauthenticated, so a mis-set primary URL must not become a probe.
+        try:
+            assert_local_destination(llm_base, llm_cfg.get("trusted_hosts", []))
+        except EndpointTrustError as exc:
+            results.append(HealthStatus(
+                name=local_name, healthy=False, error=_safe_error(exc),
+            ))
+        else:
+            results.append(_ping(
+                f"{llm_base.rstrip('/')}/models",
+                local_name,
+                headers=local_headers,
+                expect_model=local_model if local_model else None,
+                timeout=_health_probe_timeout(llm_base),
+            ))
     if (probe_external and cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled") is True):
         grok_base = cfg["models"]["grok"]["base_url"]

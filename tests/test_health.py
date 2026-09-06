@@ -29,11 +29,13 @@ from utils import health
 _OLLAMA_BASE = "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS137138,DS162092
 _OLLAMA_MODELS = "http://127.0.0.1:11434/models"  # DevSkim: ignore DS137138,DS162092
 _HOST_MODELS = "http://host/models"  # DevSkim: ignore DS137138
+# TEST-NET-3 documentation address — not loopback, never probed unless trusted.
+_UNTRUSTED_LOCAL = "http://203.0.113.8:11434/v1"  # DevSkim: ignore DS137138
 
 
 def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
                claude_enabled=False, claude_model=None, local_model=None,
-               probe_external=False):
+               local_base_url=None, trusted_hosts=None, probe_external=False):
     # probe_external defaults False to mirror the shipped api.health_probe_
     # external_providers, exactly as mode defaults to the shipped "offline":
     # a test that wants an outbound provider probe opts in, so the opt-in is
@@ -45,9 +47,11 @@ def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
                   "anthropic_version": "2023-06-01"}
     if claude_model is not None:
         claude_cfg["model"] = claude_model
-    local_llm: dict = {"base_url": _OLLAMA_BASE}
+    local_llm: dict = {"base_url": local_base_url or _OLLAMA_BASE}
     if local_model is not None:
         local_llm["model"] = local_model
+    if trusted_hosts is not None:
+        local_llm["trusted_hosts"] = trusted_hosts
     cfg = {
         "app": {"mode": mode},
         "api": {"health_probe_external_providers": probe_external},
@@ -478,6 +482,41 @@ class TestCheckAll:
         assert health.check_all(cfg_path)[0].healthy is True
         assert health.check_all(cfg_path)[0].healthy is True
         assert calls == 1
+
+    def test_untrusted_nonloopback_primary_is_not_probed(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_base_url=_UNTRUSTED_LOCAL)
+        probed: list[str] = []
+
+        def record(url, **kw):
+            probed.append(url)
+            return _OKResp()
+
+        monkeypatch.setattr(health, "_http_get", record)
+        statuses = health.check_all(cfg_path)
+        local = next(s for s in statuses if s.name in {"ollama", "local_llm"})
+        assert local.healthy is False
+        assert "203.0.113.8" not in (local.error or "")
+        assert "http://" not in (local.error or "")
+        assert not any("203.0.113.8" in u for u in probed)
+
+    def test_trusted_nonloopback_primary_is_probed(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(
+            tmp_path,
+            mode="offline",
+            local_base_url=_UNTRUSTED_LOCAL,
+            trusted_hosts=["203.0.113.8"],
+        )
+        probed: list[str] = []
+
+        def record(url, **kw):
+            probed.append(url)
+            return _OKResp()
+
+        monkeypatch.setattr(health, "_http_get", record)
+        statuses = health.check_all(cfg_path)
+        local = next(s for s in statuses if s.name in {"ollama", "local_llm"})
+        assert local.healthy is True
+        assert any("203.0.113.8" in u for u in probed)
 
 
 class TestHealthCfgCache:
