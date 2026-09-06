@@ -1231,6 +1231,39 @@ def test_abort_in_flight_unblocks_hung_post():
         httpd.shutdown()
 
 
+def test_abort_in_flight_unblocks_when_socket_hidden(monkeypatch):
+    """Darwin path: SHUT_RDWR / _sock introspection may be a no-op.
+
+    Cancel must still raise out of chat() via sliced reads so the
+    generation gate can drop. Stubbing shutdown isolates that contract.
+    """
+    monkeypatch.setattr("harness.ollama._shutdown_inflight_sockets", lambda _client: None)
+    httpd, port, entered = _hanging_model_server()
+    try:
+        chat = HarnessChatClient(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3.8:27b-mlx",
+            timeout_sec=15.0,
+        )
+        result: dict[str, object] = {}
+
+        def _call() -> None:
+            try:
+                chat.chat(system_prompt="s", messages=[{"role": "user", "content": "hi"}])
+            except HarnessLLMError as exc:
+                result["err"] = exc
+
+        worker = threading.Thread(target=_call, daemon=True)
+        worker.start()
+        assert entered.wait(3)
+        chat.abort_in_flight()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert "err" in result
+    finally:
+        httpd.shutdown()
+
+
 def test_chat_cancel_releases_hung_generation_gate(cfg):
     httpd, port, entered = _hanging_model_server()
     try:

@@ -6,7 +6,7 @@ gets a ``sanitize_error`` callable injected by gate.py -- has no redaction layer
 of its own. So the redaction has to happen where the error is raised.
 
 No live services: httpx MockTransport stands in for the model server, and
-harness.ollama imports only httpx + utils.errors, so this file needs no FastAPI.
+harness.ollama imports httpx, harness.chat_cancel, and utils.errors, so this file needs no FastAPI.
 """
 
 from __future__ import annotations
