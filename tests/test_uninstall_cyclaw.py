@@ -170,7 +170,7 @@ def test_remove_keychain_yes_deletes_five_documented_services(
     fake_security: Path, tmp_path: Path
 ) -> None:
     argv_log = tmp_path / "security-calls.log"
-    account = subprocess.check_output(["id", "-un"], text=True).strip()
+    account = subprocess.check_output(["/usr/bin/id", "-un"], text=True).strip()
     result = _run(
         "--remove-keychain",
         "--yes",
