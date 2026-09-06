@@ -742,8 +742,9 @@ _copy_key() {
 }
 
 # Fail-soft: signal TCP LISTEN pids on $1. Never abort the caller.
-# Port-scoped (not `pkill -f python`). Duplicated in uninstall-cyclaw.sh
-# because this script is copied standalone to ~/.CyClaw/bin/.
+# Port-scoped (not a process-name sweep of python). Duplicated in
+# uninstall-cyclaw.sh because this script is copied standalone to
+# ~/.CyClaw/bin/.
 free_loopback_port() {
   local port="$1" pids="" pid=""
   case "$port" in

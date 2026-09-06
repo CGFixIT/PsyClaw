@@ -132,7 +132,7 @@ stores the operator key in `localStorage`.
 1. Stop stragglers on the configured loopback ports (defaults 8787 / 8790).
    `uninstall-cyclaw.sh` does this best-effort before teardown. After a
    rotate, `setup-cyclaw-keys.sh --restart-servers` frees the same ports
-   without starting the servers and without a broad `pkill`.
+   without starting the servers and without a process-name sweep.
 2. Open a **new** terminal tab so the `# >>> cyclaw keys >>>` rc block
    re-sources `~/.CyClaw/.env`. Confirm the file is mode 600
    (`stat -f %Lp ~/.CyClaw/.env` on macOS) and that

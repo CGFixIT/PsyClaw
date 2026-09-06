@@ -71,7 +71,8 @@ confirm_destructive() {
 }
 
 # Fail-soft: signal TCP LISTEN pids on $1. Never abort the caller.
-# Port-scoped (not `pkill -f python`). Duplicated in setup-cyclaw-keys.sh.
+# Port-scoped (not a process-name sweep of python). Duplicated in
+# setup-cyclaw-keys.sh.
 free_loopback_port() {
   local port="$1" pids="" pid=""
   case "$port" in
