@@ -268,3 +268,20 @@ def test_does_not_flip_hybrid_or_soul() -> None:
     # No write-redirect into those files.
     assert not re.search(r">{1,2}\s*[\"']?.*config\.yaml", text)
     assert not re.search(r">{1,2}\s*[\"']?.*soul\.md", text)
+
+
+def test_refuses_world_readable_dotenv_and_chains_home_to_repo() -> None:
+    """A refused HOME dotenv must not shadow a loadable repo dotenv.
+
+    Dry-run exits before this load, so the contract is static: copy
+    invoke-cyclaw.sh's _source_dotenv / 600|400 gate and chain on the
+    mode-check result, not `-f`.
+    """
+    text = _script_text()
+    assert "_source_dotenv" in text
+    assert "_dotenv_mode" in text
+    assert "600|400" in text
+    assert "refusing to source $f (mode" in text
+    assert "Fix with: chmod 600 $f" in text
+    assert '_source_dotenv "$HOME_DIR/.env" || _source_dotenv "$REPO_DIR/.env"' in text
+    assert 'if [ -f "$HOME_DIR/.env" ]; then' not in text

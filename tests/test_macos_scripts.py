@@ -534,6 +534,45 @@ def test_invoke_cyclaw_names_the_file_and_remedy_when_refusing_a_dotenv() -> Non
     assert "Fix with: chmod 600 $f" in text
 
 
+def test_macos_setup_scripts_refuse_world_readable_dotenv_and_chain_home_to_repo() -> None:
+    """Setup scripts must copy invoke-cyclaw.sh's mode gate and HOME||REPO chain.
+
+    A world-readable HOME dotenv must not load and must not block the repo copy.
+    The load used to branch on `-f`; existing then stopped implying loadable.
+    """
+    expected_chain = {
+        "setup-from-clone.sh": (
+            '_source_dotenv "$HOME_DIR/.env" || _source_dotenv "$REPO_DIR/.env"'
+        ),
+        "setup-cyclaw.sh": (
+            '_source_dotenv "$ENV_FILE" || _source_dotenv "$REPO_DIR/.env"'
+        ),
+    }
+    for name, chain in expected_chain.items():
+        text = (_REPO_ROOT / "macos" / name).read_text(encoding="utf-8")
+        assert "_source_dotenv" in text, f"{name} must define _source_dotenv"
+        assert "_dotenv_mode" in text, f"{name} must define _dotenv_mode"
+        assert "600|400" in text, f"{name} must accept only mode 600 or 400"
+        assert "refusing to source $f (mode" in text, f"{name} must name a refused dotenv"
+        assert "Fix with: chmod 600 $f" in text, f"{name} must state the chmod remedy"
+        assert chain in text, f"{name} must chain HOME then REPO on the mode-check result"
+        assert 'if [ -f "$HOME_DIR/.env" ]; then' not in text
+        assert 'if [ -f "$ENV_FILE" ]; then' not in text
+
+
+@_BASH_EXECUTION_REQUIRED
+@pytest.mark.parametrize("script", ("setup-from-clone.sh", "setup-cyclaw.sh"))
+def test_macos_setup_scripts_bash_n(script: str) -> None:
+    result = subprocess.run(
+        [_BASH, "-n", str(_REPO_ROOT / "macos" / script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX child-process env inheritance")
 def test_invoke_cyclaw_falls_back_to_repo_dotenv_when_home_dotenv_is_refused(tmp_path: Path) -> None:
     """A refused HOME dotenv must not shadow a loadable repo dotenv.
