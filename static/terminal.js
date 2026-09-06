@@ -900,7 +900,14 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null, confir
     // into the plan's plain-language route sentence; raw fields stay available
     // when advanced mode is on. Blocked/unavailable roles return no sentence
     // so we never claim a model answered.
-    const route = describeAnswerRoute(data.model_used, data.llm_model);
+    //
+    // A 200 can still carry data.error (failed generation, destination-trust
+    // reject, output-guard block) while model_used stays local/grok/claude.
+    // Success copy must not run in that case -- the WARNING entry below is
+    // the truthful path.
+    const route = data.error
+      ? null
+      : describeAnswerRoute(data.model_used, data.llm_model);
     const meta = [];
     if (route) {
       meta.push({ k: 'route', v: route });

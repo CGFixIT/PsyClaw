@@ -729,6 +729,26 @@ def test_answer_route_copy_uses_stable_model_used_roles():
     assert "if (advancedMode)" in submit
     # The default row uses the friendly sentence; it must not still be the
     # raw role/mode/hits list for every visitor.
-    default_meta = submit.split("const route = describeAnswerRoute", 1)[1]
+    default_meta = submit.split("const route =", 1)[1]
     assert "{ k: 'route', v: route }" in default_meta
     assert "if (route)" in default_meta
+
+
+def test_answer_route_copy_is_suppressed_when_query_body_has_error():
+    """A 200 /query can keep model_used as local/grok/claude and still set
+    error (failed generation, destination-trust reject, output-guard block).
+    Success-oriented route copy must not run in that case; the existing
+    WARNING entry remains the user-facing path.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    submit = js.split("async function submitQuery(", 1)[1]
+    after_confirm = submit.split("if (data.needs_confirm)", 1)[1]
+    route_assign = after_confirm.split("const route =", 1)[1].split("const meta =", 1)[0]
+    assert "data.error" in route_assign
+    assert route_assign.index("data.error") < route_assign.index("describeAnswerRoute"), (
+        "route success copy must be gated on the absence of data.error"
+    )
+    assert after_confirm.index("const route =") < after_confirm.index("if (data.error)"), (
+        "the error WARNING path must still run after the route decision"
+    )
+    assert "addEntry('error', 'WARNING'" in after_confirm
