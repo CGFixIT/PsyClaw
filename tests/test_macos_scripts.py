@@ -314,6 +314,19 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
     text = (_REPO_ROOT / "macos" / "uninstall-cyclaw.sh").read_text(encoding="utf-8")
     assert "unschedule_landed_launchagents" in text
     assert "launchctl bootout" in text
+    assert "--remove-keychain" in text
+    assert "delete-generic-password" in text
+    assert "free_loopback_port" in text
+    assert "pkill" not in text
+    for service in (
+        "com.cgfixit.cyclaw.api-key",
+        "com.cgfixit.cyclaw.telegram-bot-token",
+        "com.cgfixit.cyclaw.grok-api-key",
+        "com.cgfixit.cyclaw.anthropic-api-key",
+        "com.cgfixit.cyclaw.gh-token",
+    ):
+        assert service in text
+    assert 'ACCOUNT="$(id -un)"' in text
     for label in labels:
         assert label in text
     # Label-domain bootout must run even when the plist file is already gone.
@@ -335,6 +348,11 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
     assert "gate, harness" in readme
     assert "keys-rotate" in readme
     assert "opentweet" in readme
+    assert "--remove-keychain" in readme
+    assert "--restart-servers" in readme
+    assert "401 / key drift recovery" in readme
+    setup_guide = (_REPO_ROOT / "setup-guide.md").read_text(encoding="utf-8")
+    assert "macos/README.md#401--key-drift-recovery" in setup_guide
 
 
 def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
@@ -561,7 +579,15 @@ def test_macos_setup_scripts_refuse_world_readable_dotenv_and_chain_home_to_repo
 
 
 @_BASH_EXECUTION_REQUIRED
-@pytest.mark.parametrize("script", ("setup-from-clone.sh", "setup-cyclaw.sh"))
+@pytest.mark.parametrize(
+    "script",
+    (
+        "setup-from-clone.sh",
+        "setup-cyclaw.sh",
+        "setup-cyclaw-keys.sh",
+        "uninstall-cyclaw.sh",
+    ),
+)
 def test_macos_setup_scripts_bash_n(script: str) -> None:
     result = subprocess.run(
         [_BASH, "-n", str(_REPO_ROOT / "macos" / script)],

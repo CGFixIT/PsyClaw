@@ -52,6 +52,10 @@
 #                       --rotate --skip-prompts --no-print-key. Prints the
 #                       launchctl bootstrap command.
 #   --unschedule-rotate bootout + delete that LaunchAgent
+#   --restart-servers   after a successful write, best-effort free the
+#                       configured gate/harness loopback ports so a stale
+#                       process is not still holding the old CYCLAW_API_KEY.
+#                       Does not start the servers (open a new shell + cyclaw).
 #   --gate-port PORT    RAG console (default 8787 / CYCLAW_GATE_PORT)
 #   --harness-port PORT harness console (default 8790 / CYCLAW_HARNESS_PORT)
 #   --repo-path PATH    CyClaw checkout to receive a sibling .env
@@ -67,7 +71,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '3,68p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,69p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 step() { printf '[cyclaw] %s\n' "$1"; }
@@ -95,6 +99,7 @@ OPEN_CONSOLES=0
 FILL_BROWSER=0
 SCHEDULE_ROTATE=""
 UNSCHEDULE_ROTATE=0
+RESTART_SERVERS=0
 GATE_PORT="${CYCLAW_GATE_PORT:-8787}"
 HARNESS_PORT="${CYCLAW_HARNESS_PORT:-8790}"
 REPO_PATH=""
@@ -142,6 +147,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --unschedule-rotate) UNSCHEDULE_ROTATE=1; shift ;;
+    --restart-servers) RESTART_SERVERS=1; shift ;;
     --gate-port)
       GATE_PORT="${2:?--gate-port requires a value}"
       shift 2
@@ -735,6 +741,64 @@ _copy_key() {
   fi
 }
 
+# Fail-soft: signal TCP LISTEN pids on $1. Never abort the caller.
+# Port-scoped (not `pkill -f python`). Duplicated in uninstall-cyclaw.sh
+# because this script is copied standalone to ~/.CyClaw/bin/.
+free_loopback_port() {
+  local port="$1" pids="" pid=""
+  case "$port" in
+    ''|*[!0-9]*)
+      warn "refusing to free a non-numeric port ('$port')"
+      return 0
+      ;;
+  esac
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    warn "port $port out of range; left listeners alone"
+    return 0
+  fi
+  if ! command -v lsof >/dev/null 2>&1; then
+    warn "lsof not found; cannot free listeners on :$port"
+    return 0
+  fi
+  # Any bind on this TCP port blocks a later 127.0.0.1 bind (wildcard included).
+  pids="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  for pid in $pids; do
+    case "$pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if [ "$pid" = "$$" ] || [ "$pid" -eq 1 ]; then
+      continue
+    fi
+    step "stopping listener pid $pid on :$port"
+    kill "$pid" 2>/dev/null || warn "could not signal pid $pid on :$port"
+  done
+  return 0
+}
+
+# Crash-only KeepAlive would respawn a SIGTERM'd launchd job. Boot those two
+# labels out first (fail-soft), then free leftover invoke-cyclaw listeners.
+_bootout_server_agents() {
+  local uid label
+  uid="$(id -u 2>/dev/null || echo 0)"
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  command -v launchctl >/dev/null 2>&1 || return 0
+  for label in com.cgfixit.cyclaw.gate com.cgfixit.cyclaw.harness; do
+    launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+  done
+}
+
+_restart_servers() {
+  step "freeing loopback listeners on :$GATE_PORT / :$HARNESS_PORT (best-effort)..."
+  _bootout_server_agents
+  free_loopback_port "$GATE_PORT"
+  free_loopback_port "$HARNESS_PORT"
+  step "ports freed. Start cyclaw in a new shell to load the new CYCLAW_API_KEY"
+  step "browser still holds the old #apiKey until you paste or re-run --fill-browser"
+}
+
 _open_consoles() {
   local gate harness
   gate="http://127.0.0.1:${GATE_PORT}"
@@ -1065,9 +1129,17 @@ if [ "$FILL_BROWSER" -eq 0 ]; then
 fi
 _warn_if_installed_copy_drifted
 
+if [ "$RESTART_SERVERS" -eq 1 ]; then
+  _restart_servers
+fi
+
 if [ "$GENERATED_NEW" -eq 1 ]; then
   step "server      : restart gate.py to load the new CYCLAW_API_KEY"
   step "            : nothing in CyClaw reads .env at runtime; the key was NOT applied live"
+  if [ "$RESTART_SERVERS" -eq 0 ]; then
+    step "            : stale :$GATE_PORT / :$HARNESS_PORT listeners keep the old key"
+    step "            : pass --restart-servers to free those ports, then start cyclaw in a new shell"
+  fi
 fi
 
 if [ "$GENERATED_NEW" -eq 1 ] && [ "$PRINT_KEY" != "never" ]; then
