@@ -12,9 +12,19 @@ related:
   - agentic/registry.py
 ---
 
-> **Superseded for status (2026-08-27).** Live matrix: [`README.md`](./README.md).
-> Query-path `check()` wrap, ToolBroker, and harness `/loop` + `agent_run` are
-> on `main`. This file remains a historical redirect, not a to-do.
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED by
+> `docs/NeMo/README.md`. 3A (scanner consolidation into `guardrails/rails.py`)
+> is shipped: `guardrails/rails.py` no longer holds only 7 markers, per
+> `docs/NeMo/README.md`'s "Implemented offline rails" list. `utils/tool_broker.py`
+> exists and is wired into `harness/server.py:1368` (`assert_allowed`). 3C
+> (promote `agentic/fsconnect` scanner from advisory to enforcing) remains an
+> unresolved operator decision — not verified as flipped in `config.yaml`.
+>
+> **What's left:**
+> - Confirm whether 3C (fsconnect scanner advisory→enforcing) was ever decided;
+>   if not, it is still an open operator risk call, not a code task.
+> - Historical redirect otherwise; candidate for deletion once 3C is resolved
+>   one way or the other and recorded in `docs/NeMo/README.md`.
 
 ## Summary
 

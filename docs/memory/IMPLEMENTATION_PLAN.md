@@ -1,5 +1,10 @@
 # CyClaw Memory Foundation — Implementation Plan
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE. The `memory/` package (`models.py`, `store.py`, `policy.py`, `retrieval_adapter.py`, `mirror.py`, `consolidation.py` stub, `selftest.py`, plus a `flags.py` not in the original plan) exists, `gate_memory.py` is registered in `gate.py`, `config.yaml`'s `memory:` block (`:260-286`) matches this plan's schema field-for-field (all switches default `false`), and seven `tests/test_memory_*.py` files exist. Every switch still ships off, so behavior is unchanged when disabled, exactly as designed.
+>
+> **What's left:**
+> - Nothing outstanding — fully implemented; see `memory/`, `gate_memory.py`, `config.yaml`'s `memory:` block, and `docs/memory/README.md` (the operator-facing doc this plan called for). This doc is now a historical record and is a candidate for deletion.
+
 | Field | Value |
 |---|---|
 | **Status** | IMPLEMENTED on `feature/memory-foundation` (draft PR) |

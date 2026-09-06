@@ -1,5 +1,10 @@
 # GitHub Write Enablement — procedure and security review
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE (as a procedure/checklist doc — meaning the enablement it describes is done and signed, not that writes are unrestricted). Verified against live code: `agentic/writer.py` has `EXECUTION_ENABLED = True` and the disable-only `CYCLAW_AGENTIC_WRITE_DISABLE` env kill switch (`_WRITE_DISABLE_ENV`); `config.yaml` ships `agentic.mode: "write"` / `agentic.writes_enabled: true` but `agentic.enabled: false` (line ~799) and both `deepagent_github.allow_github_writes: false` / `allow_git_write_tools: false` (lines 844, 853) — exactly the layered posture this doc's gate-chain table describes. This doc is self-maintaining (it already tracks its own checklist re-runs and the 2026-08-07 sign-off inline), so nothing here is stale relative to code.
+>
+> **What's left:**
+> - Nothing outstanding — this is a living operational record, current as of its last internal edit. Keep updating it in place (not this stamp) if any of the six gates change state; do not archive it while `agentic.enabled` could still flip to `true`.
+
 **Status: ARMED (operator-signed 2026-08-07).** `agentic/writer.py` ships
 `EXECUTION_ENABLED = True`, and `config.yaml` ships `mode: write` +
 `writes_enabled: true`. The layer master switch (`agentic.enabled`) still ships

@@ -1,5 +1,16 @@
 # NeMo Phase 5 — wrap `POST /api/agent/run` through ToolBroker
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE.
+> Verified live: `harness/server.py:92` imports `from utils.tool_broker import
+> ToolDenied, assert_allowed`, and `assert_allowed(...)` is called at line
+> 1368 in the `agent_run` handler, matching this doc's Decision 2 call-site
+> contract exactly.
+>
+> **What's left:**
+> - Nothing outstanding — fully implemented; see `harness/server.py:92,1368`
+>   and `tests/test_tool_broker_adversarial.py`. This doc is now a historical
+>   record and is a candidate for deletion.
+
 **Status (2026-08-27):** **SHIPPED** on `main` as [#1163](https://github.com/cgfixit/CyClaw/pull/1163).
 This file is the decision log. Do not treat the body as a to-do.
 

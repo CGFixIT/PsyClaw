@@ -1,5 +1,10 @@
 # Ponytail Review — `GrokClient` API-key normalization
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE. This is not a roadmap despite living in `zIdeas/` — it's a one-time code-review record for a single commit (`c4189b6`). `llm/client.py`'s `GrokClient.__init__` today reads `self.api_key = (os.environ.get("GROK_API_KEY") or "").strip()` (verified in `llm/client.py`), matching the "Change applied" diff at the bottom of this doc exactly — the simplified, single-line-comment version is what's live, not the original two-line-comment/`str()`-wrapped version.
+>
+> **What's left:**
+> - Nothing outstanding — this is a closed review of a landed, verified diff. Historical record; candidate for deletion (or relocation out of `zIdeas/`, since it isn't an idea/proposal at all).
+
 **Scope:** `llm/client.py` — `GrokClient.__init__` env-var handling (commit `c4189b6`, "llm: strip GROK_API_KEY before use").
 **Mode:** ponytail seven-rules audit.
 

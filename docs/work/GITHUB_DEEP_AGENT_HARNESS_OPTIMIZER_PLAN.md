@@ -1,5 +1,10 @@
 # CyClaw GitHub Deep Agent + Harness Optimizer Implementation Plan
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED (per this doc's own header) by `agentic/real_repo_loop.py`, the live plan→patch→verify→commit path. Verified: `agentic/real_repo_loop.py` exists and is wired into `agentic.cli`'s `real-repo-run*` subcommands and the harness's authenticated agent-run routes (CLAUDE.md's module table). The code this plan produced — `agentic/deepagent_github/` (`builder.py`, `subagents.py`, `tools.py`, `permissions.py`) and `agentic/harness_optimizer/` — both still exist in full and remain disabled by default (`config.yaml`'s `agentic:` block), unmodified since the 2026-07-31 retirement decision, exactly as the header states.
+>
+> **What's left:**
+> - Nothing outstanding — this 1148-line plan is now pure design history for a retired subsystem; `DEEP_AGENT_HARNESS_PHASES_6_9.md` is the authoritative record of what actually shipped from it. Candidate for archival (not deletion, since `DEEP_AGENT_HARNESS_PHASES_6_9.md` and `CLAUDE.md` both still reference it by name).
+
 Status: Historical design plan with the phase 6-9 implementation now recorded
 behind disabled-by-default agentic feature gates. The current behavior and
 security boundary are authoritative in `DEEP_AGENT_HARNESS_PHASES_6_9.md`.

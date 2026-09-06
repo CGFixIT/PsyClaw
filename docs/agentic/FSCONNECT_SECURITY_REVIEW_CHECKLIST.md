@@ -1,5 +1,11 @@
 # fsconnect Write-Enablement Security Review
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE — this is a pre-flight checklist template, not a build plan, and the machinery it checks against is fully built. Verified: every named test exists and covers what the doc claims (`tests/test_fsconnect_writer.py::test_intent_precedes_applied`, `::test_purge_refused_without_allow_hard_delete`; `tests/test_fsconnect_quota.py::test_append_loop_eventually_denied`; `tests/test_fsconnect_ratelimit.py::test_limit_persists_across_invocations`; `tests/test_fsconnect_pathsafe.py`); `utils/ops_runner.py`'s `_FSCONNECT_ACTIONS = frozenset({"status","test","list","read","stat","grep","glob"})` confirms `/ops/fsconnect` is read-only-only as claimed; `config.yaml` ships `fsconnect.writes_enabled: false` (§B's precondition holds) but `strict_roots: false` (§B recommends `true`) and `allow_unc_roots`/`allow_macos_volume_roots` both `false` as recommended. What's unverifiable from code alone: this is a sign-off form (`Reviewer/Date/Deployment/Config sha256` blank), and no evidence in-repo shows it has ever actually been filed/signed for a real deployment.
+>
+> **What's left:**
+> - If a production fsconnect write-enablement is ever planned, actually execute and file this checklist (blank sign-off fields at top and bottom) before flipping `fsconnect.writes_enabled: true` — the doc's own machinery is ready but the sign-off itself is a one-time human act with no code artifact to verify.
+> - Consider setting `strict_roots: true` in the shipped default config to match this checklist's §B recommendation, or note in config comments why `false` is the deliberate shipped default.
+
 Sign-off required **before** `fsconnect.writes_enabled: true` on any production
 deployment. This checklist is written against the Phase 2 implementation actually
 shipped in `agentic/fsconnect/` (writer, pathsafe, trash, quota, config, cli); every

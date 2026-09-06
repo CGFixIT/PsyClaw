@@ -1,3 +1,16 @@
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE.
+> The `opentweet/` package exists in full (`__init__.py`, `cli.py`,
+> `client.py`, `config.py`, `runner.py`, `selftest.py`, `README.md`), and
+> `config.yaml:1146` carries the `opentweet:` block described here. I6
+> isolation (never imported by the core six) matches the design. Live
+> operator validation (a real posted draft against `opentweet.io`) was not
+> re-verified this pass — this doc does not itself claim that was done.
+>
+> **What's left:**
+> - Confirm live end-to-end posting was ever operator-validated (this doc
+>   doesn't record a validation log the way `TELEGRAM_DESIGN.md` does); if
+>   not, that's the one remaining gap before calling this COMPLETE.
+
 # OpenTweet X channel (v1)
 
 Out-of-band CyClaw channel. Telegram analog. Default-off.

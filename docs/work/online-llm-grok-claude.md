@@ -1,5 +1,10 @@
 # Enabling Grok and Claude Online Fallback Queries in CyClaw
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE. Re-confirmed directly against `config.yaml`: `models.grok.enabled: true` (line 140) and `models.claude.enabled: true` (line 157) — both armed exactly as this doc's 2026-08-15 update describes. The triple gate's third leg (`user_confirmed_online`, per-request) is unaffected. The one item this doc still calls unbuilt — §6's web UI toggle for `grok.enabled`/`claude.enabled` — remains absent: `static/terminal.html` has no such control (grep clean for any grok/claude enable toggle).
+>
+> **What's left:**
+> - §6's proposed runtime toggle in `static/terminal.html` for flipping provider `enabled` flags without a config edit + restart (explicitly still a "future enhancement," not core scope)
+
 **Status**: Verified against current main branch HEAD `ce1e07a1add713f881beb34eb132b4c4d82c0944` (Jul 9, 2026) and recent Claude parity work (#445–#449, #435 retrieval error surfacing, redaction standardization, shared fallback helper).
 
 **Update (2026-08-15): both flags are now armed.** `config.yaml` ships

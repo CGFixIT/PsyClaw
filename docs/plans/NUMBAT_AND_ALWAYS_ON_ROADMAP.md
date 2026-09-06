@@ -1,5 +1,22 @@
 # CyClaw × Numbat × Always-On Roadmap
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** PARTIAL, and this
+> doc undercounts progress in one spot: Step 2 Slice A (hook-verdict Numbat
+> emission) is actually **shipped** — `utils/external_pre_hook.py` has
+> `emit_verdict`-gated `_emit_hook_verdict(...)` calls emitting
+> `network.indicator`/`permission.denied` events (lines ~185-244), landed in
+> commit `f8ebe430` (2026-08-27, "#1128 Slice A"), the same date as this doc's
+> last edit — the doc's own "Remaining" line for Slice A is stale. Slice B
+> (CEL) is genuinely NOT implemented: `config.yaml:647`'s `numbat.cel:` block
+> and the `numbat-cel` pyproject extra are scaffolding only — zero `cel_python`
+> imports anywhere in the tree. Always-on Phases 0/2/3/4 are not started.
+>
+> **What's left:**
+> - Mark Step 2 Slice A DONE in this doc's own table (code already ships it).
+> - Step 3 / Slice B: wire `cel-python` rules into the sanitizer (monitor-only).
+> - Step 5 templates, and Always-on Phases 0 (daemonize), 2 (jobs runner),
+>   3 (collectors), 4 (Numbat enforce mode) — none started.
+
 Status: living plan
 Related PR: feat/numbat-audit-ndjson-v1 (mainline audit-trail projection)
 

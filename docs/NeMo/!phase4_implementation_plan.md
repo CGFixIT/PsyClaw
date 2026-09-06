@@ -1,5 +1,18 @@
 # NeMo Phase 4 — query-path output rail (`guardrail_output`) design
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED by
+> `docs/NeMo/README.md`. Verified live: `check_output()` exists at
+> `guardrails/integration.py:296` and `detect_soul_leak()` at
+> `guardrails/rails.py:123` (Phase 4b, addressing this doc's Decision 2). Both
+> 4a (grounding) and 4b (soul-leak) are shipped, offline-only, `local_llm`
+> path only, still gated behind `guardrails.enabled` (config.yaml:1043,
+> ships `false`). This doc's own banner already says the same.
+>
+> **What's left:**
+> - Nothing outstanding for 4a/4b — see `docs/NeMo/README.md`'s live matrix.
+>   This file is a decision log; candidate for deletion once cross-references
+>   to it are removed from `README.md`/`phase2_implementation_plan.md`.
+
 > **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
 > [`README.md`](./README.md). 4a and 4b are **shipped**. This body is a decision log.
 

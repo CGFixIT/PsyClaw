@@ -1,5 +1,10 @@
 # CyClaw Memory Subsystem
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE — this is the current operator-facing reference for a shipped feature, not a stale plan. Verified against the live tree: `config.yaml`'s `memory:` block (`:260-286`) matches every default/route claim here, the `memory/` package (including `flags.py`, which backs the `facts.retrieval_enabled` rename this doc describes) exists, `gate_memory.py` implements the `/memory/*` + `/query/export/html` routes, and `memory/selftest.py` is runnable.
+>
+> **What's left:**
+> - Nothing outstanding as documentation — keep this file in sync if `memory/policy.py`'s injection-scan source or the route table in `gate_memory.py` changes. Not a deletion candidate; it is live operator documentation.
+
 Optional, **default-off** facts + episodes store with propose/apply governance and optional retrieval fusion.
 
 > **Not** `docs/memories/` (sandbox notes). This feature lives under `docs/memory/` and package `memory/`.

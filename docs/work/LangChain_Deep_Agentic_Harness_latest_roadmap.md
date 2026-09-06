@@ -1,5 +1,10 @@
 # CyClaw LangChain Deep Agentic Harness — Status and Roadmap
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED. The doc already self-identifies as HISTORICAL (2026-08-05), and CLAUDE.md's module table confirms the DeepAgents subgraph (`agentic/deepagent_github/builder.py`) was formally retired by owner decision 2026-07-31, "no further development planned." The live real-repo coding path is `agentic/real_repo_loop.py` (plan → patch → verify → human-decides → commit against a jailed real clone) plus the harness's `/api/agent/*` routes — confirmed present and referenced in `CLAUDE.md`'s module table. The Grok/Claude "provider parity inside the harness" design sketched deep in this doc was never built for the DeepAgents surface specifically, but real-repo-loop's own `--provider` flag (per `CLAUDE.md`) achieves the equivalent goal on the surface that actually shipped.
+>
+> **What's left:**
+> - Nothing — this doc is superseded by `agentic/real_repo_loop.py`, `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, and `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` (also retired/superseded). Candidate for deletion or an explicit archive move.
+
 **Status (updated 2026-08-05): HISTORICAL.** This file is a dated
 (2026-07-11) status/roadmap snapshot for the **retired** LangChain Deep
 Agents harness surface (`agentic/deepagent_github/` +

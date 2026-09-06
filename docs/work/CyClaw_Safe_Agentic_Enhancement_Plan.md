@@ -1,5 +1,10 @@
 # CyClaw Safe Agentic Enhancement — Master Plan (v0.1)
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE. This doc's own inline 2026-08-15 corrections are accurate against current code: `agentic.enabled` ships `false`, but `EXECUTION_ENABLED` was armed 2026-08-07 and `agentic/real_repo_loop.py` implements `execute_write` for exactly one operation (`pr_create`, draft-only) behind the four-gate chain; `harness/registry_view.py`/`harness/skills_view.py` surface the registry read-only as roadmap item 4 claims. What remains unimplemented per the doc's own text: `pr_comment`/`issue_comment` stay plan-only (no `execute_write` support), so "real writes" is narrower than full parity.
+>
+> **What's left:**
+> - Implement `execute_write` for `pr_comment`/`issue_comment` (still plan-only per `agentic/real_repo_loop.py`), behind the same gate chain as `pr_create`
+
 > Status: **implemented in this branch as an experimental, opt-in, disabled-by-default
 > layer.** This document is the design record and review guide.
 
