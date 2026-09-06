@@ -206,6 +206,13 @@ expire it.
   history (this session, after #1317 merged).
 - **The stop hook nags on every unpushed commit and dirty tree.** Commit per
   concern and push before ending a turn; do not accumulate.
+- **After a squash-merge GitHub deletes the head branch, and the stale
+  tracking ref makes the stop hook report phantom "N unpushed commits".**
+  Once the designated branch is reset onto `origin/main`, `git push` is not
+  a fast-forward against the old remote branch and `--force-with-lease`
+  answers `rejected (stale info)` because the remote ref no longer exists
+  (2026-09-06, after #1319). Fix: `git fetch --prune origin`, then a plain
+  `git push -u origin <branch>` recreates it. No force push needed.
 - **`mergeable_state: "unstable"` means checks pending or failing, not a
   conflict.** `"dirty"` is the conflict state. Read the check runs before
   acting on "unstable".
@@ -283,6 +290,7 @@ expire it.
 | `uv pip install --dry-run --system ...` → "externally managed" | system interpreter refuses | run inside a venv, or report unverified |
 | `discover-skills` job: `unclassified skill '<name>'` | new `verify.sh` without a profile arm in `ci.yml` | add the skill to the `stdlib` (or `yaml`/`heavy`) case |
 | `update_trigger` → "requested resource was not found" | the timer was deleted earlier | `send_later` a new one; do not assume one exists |
+| stop hook: "N unpushed commits" on a branch you just reset to `origin/main`; `push --force-with-lease` → `rejected (stale info)` | GitHub deleted the merged head branch; local tracking ref is stale | `git fetch --prune origin` then plain `git push -u origin <branch>` |
 | harness `409 CHAT_BUSY` / `AGENT_RUN_BUSY` / `LOOP_IN_FLIGHT` | single-stream local model, gate held by another turn or an agent run | wait or stop the other work; never add parallelism |
 
 ## Guardrails
