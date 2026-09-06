@@ -122,12 +122,12 @@ def test_invoke_cyclaw_loads_persisted_api_key_from_dotenv() -> None:
     assert "refusing to source .env with xtrace" in text
     assert "refusing to source $f (mode" in text
     assert "want 600 or 400" in text
-    assert 'stat -f %Lp' in text
+    assert '/usr/bin/stat -f %Lp' in text
     assert 'stat -c %a' in text
     load_idx = text.index("$HOME_DIR/.env")
     uvicorn_idx = text.index("uvicorn gate:app")
     assert load_idx < uvicorn_idx, "dotenv load must run before uvicorn is spawned"
-    window = text[max(0, load_idx - 400) : load_idx + 400]
+    window = text[text.index("_source_dotenv() {") : load_idx]
     assert "set -a" in window, "sourced .env assignments must be exported (set -a)"
     warn = "Typing the key in the browser cannot configure the server"
     assert warn in text
@@ -534,6 +534,45 @@ def test_invoke_cyclaw_names_the_file_and_remedy_when_refusing_a_dotenv() -> Non
     assert "Fix with: chmod 600 $f" in text
 
 
+def test_macos_setup_scripts_refuse_world_readable_dotenv_and_chain_home_to_repo() -> None:
+    """Setup scripts must copy invoke-cyclaw.sh's mode gate and HOME||REPO chain.
+
+    A world-readable HOME dotenv must not load and must not block the repo copy.
+    The load used to branch on `-f`; existing then stopped implying loadable.
+    """
+    expected_chain = {
+        "setup-from-clone.sh": (
+            '_source_dotenv "$HOME_DIR/.env" || _source_dotenv "$REPO_DIR/.env"'
+        ),
+        "setup-cyclaw.sh": (
+            '_source_dotenv "$ENV_FILE" || _source_dotenv "$REPO_DIR/.env"'
+        ),
+    }
+    for name, chain in expected_chain.items():
+        text = (_REPO_ROOT / "macos" / name).read_text(encoding="utf-8")
+        assert "_source_dotenv" in text, f"{name} must define _source_dotenv"
+        assert "_dotenv_mode" in text, f"{name} must define _dotenv_mode"
+        assert "600|400" in text, f"{name} must accept only mode 600 or 400"
+        assert "refusing to source $f (mode" in text, f"{name} must name a refused dotenv"
+        assert "Fix with: chmod 600 $f" in text, f"{name} must state the chmod remedy"
+        assert chain in text, f"{name} must chain HOME then REPO on the mode-check result"
+        assert 'if [ -f "$HOME_DIR/.env" ]; then' not in text
+        assert 'if [ -f "$ENV_FILE" ]; then' not in text
+
+
+@_BASH_EXECUTION_REQUIRED
+@pytest.mark.parametrize("script", ("setup-from-clone.sh", "setup-cyclaw.sh"))
+def test_macos_setup_scripts_bash_n(script: str) -> None:
+    result = subprocess.run(
+        [_BASH, "-n", str(_REPO_ROOT / "macos" / script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX child-process env inheritance")
 def test_invoke_cyclaw_falls_back_to_repo_dotenv_when_home_dotenv_is_refused(tmp_path: Path) -> None:
     """A refused HOME dotenv must not shadow a loadable repo dotenv.
@@ -595,3 +634,36 @@ def test_invoke_cyclaw_falls_back_to_repo_dotenv_when_home_dotenv_is_refused(tmp
     assert "from-repo" not in output, "a loaded dotenv's value must never print"
     assert "Fix with: chmod 600" in result.stderr, "the refusal must state the remedy"
     assert status_file.read_text(encoding="utf-8") == "repo\n"
+
+
+@pytest.mark.parametrize("script", ["invoke-cyclaw.sh", "setup-cyclaw.sh", "setup-from-clone.sh"])
+def test_dotenv_uses_system_stat_on_darwin(script):
+    text = (_REPO_ROOT / "macos" / script).read_text(encoding="utf-8")
+    assert '/usr/bin/stat -f %Lp "$1"' in text
+
+
+@_BASH_EXECUTION_REQUIRED
+@pytest.mark.parametrize("script", ["invoke-cyclaw.sh", "setup-cyclaw.sh", "setup-from-clone.sh"])
+@pytest.mark.parametrize("allexport", [False, True])
+def test_dotenv_source_failure_falls_back_and_restores_export(script, allexport):
+    text = (_REPO_ROOT / "macos" / script).read_text(encoding="utf-8")
+    helper = text[text.index("_source_dotenv() {"):]
+    helper = helper[:helper.index("\n}") + 2]
+    # Keep permission probing separate: exercise source status and shell state.
+    program = helper + r"""
+_dotenv_mode() { echo 600; }
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+printf 'DOTENV_TEST_VALUE=home\nfalse\n' > "$work/home"
+printf 'DOTENV_TEST_VALUE=repo\n' > "$work/repo"
+""" + ("set -a\n" if allexport else "set +a\n") + r"""
+before=$-
+_source_dotenv "$work/home" || _source_dotenv "$work/repo"
+[ "$DOTENV_TEST_VALUE" = repo ] || exit 21
+case "$before" in
+  *a*) case "$-" in *a*) ;; *) exit 22 ;; esac ;;
+  *) case "$-" in *a*) exit 23 ;; esac ;;
+esac
+"""
+    result = subprocess.run([_BASH, "-c", program], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr

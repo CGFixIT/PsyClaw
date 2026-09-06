@@ -406,22 +406,46 @@ fi
 # Load keys into THIS process so the servers inherit them.
 # The dotenv is chmod 600 and gitignored. Never print its contents.
 # xtrace would dump every assignment — refuse rather than leak.
+_dotenv_mode() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    /usr/bin/stat -f %Lp "$1" 2>/dev/null || true
+  else
+    stat -c %a "$1" 2>/dev/null || true
+  fi
+}
+
+_source_dotenv() {
+  local f="$1"
+  local mode=""
+  [ -f "$f" ] || return 1
+  mode="$(_dotenv_mode "$f")"
+  case "$mode" in
+    600|400) ;;
+    *)
+      # Name the file and the remedy. Without them the operator sees only a
+      # mode number here and "CYCLAW_API_KEY not set" below, and the actual
+      # cause -- a dotenv other local accounts can read -- goes unstated.
+      echo "[cyclaw] warn : refusing to source $f (mode ${mode:-unknown}; want 600 or 400). Fix with: chmod 600 $f" >&2
+      return 1
+      ;;
+  esac
+  # shellcheck disable=SC1090
+  local source_status=0
+  local had_allexport=0
+  case "$-" in *a*) had_allexport=1 ;; esac
+  set -a
+  . "$f" || source_status=$?
+  if [ "$had_allexport" -eq 0 ]; then
+    set +a
+  fi
+  return "$source_status"
+}
+
 case "$-" in
   *x*) die "refusing to source .env with xtrace on (would print secrets). Re-run without bash -x." ;;
 esac
-if [ -f "$HOME_DIR/.env" ]; then
-  # shellcheck disable=SC1090
-  set -a
-  . "$HOME_DIR/.env"
-  set +a
-  step "sourced $HOME_DIR/.env into this process (values not printed)"
-elif [ -f "$REPO_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$REPO_DIR/.env"
-  set +a
-  step "sourced $REPO_DIR/.env into this process (values not printed)"
-fi
+# Chained on the result, not `-f`: a refused HOME file must not shadow the repo copy.
+_source_dotenv "$HOME_DIR/.env" || _source_dotenv "$REPO_DIR/.env" || true
 
 # -- 6. gh auth (optional, never prints a token) ------------------------------
 

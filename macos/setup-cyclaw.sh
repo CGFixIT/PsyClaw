@@ -375,25 +375,49 @@ ENV_FILE="$HOME_DIR/.env"
 
 # xtrace would print every assignment while sourcing the dotenv. Refuse rather
 # than turning a convenience flag into a credential-disclosure feature.
+_dotenv_mode() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    /usr/bin/stat -f %Lp "$1" 2>/dev/null || true
+  else
+    stat -c %a "$1" 2>/dev/null || true
+  fi
+}
+
+_source_dotenv() {
+  local f="$1"
+  local mode=""
+  [ -f "$f" ] || return 1
+  mode="$(_dotenv_mode "$f")"
+  case "$mode" in
+    600|400) ;;
+    *)
+      # Name the file and the remedy. Without them the operator sees only a
+      # mode number here and "CYCLAW_API_KEY not set" below, and the actual
+      # cause -- a dotenv other local accounts can read -- goes unstated.
+      echo "[cyclaw] warn : refusing to source $f (mode ${mode:-unknown}; want 600 or 400). Fix with: chmod 600 $f" >&2
+      return 1
+      ;;
+  esac
+  # shellcheck disable=SC1090
+  local source_status=0
+  local had_allexport=0
+  case "$-" in *a*) had_allexport=1 ;; esac
+  set -a
+  . "$f" || source_status=$?
+  if [ "$had_allexport" -eq 0 ]; then
+    set +a
+  fi
+  return "$source_status"
+}
+
 case "$-" in
   *x*)
     die "refusing to source $ENV_FILE while shell xtrace is enabled"
     ;;
 esac
 
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
-  set +a
-  step "loaded $ENV_FILE into this process (values not printed)"
-elif [ -f "$REPO_DIR/.env" ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . "$REPO_DIR/.env"
-  set +a
-  step "loaded $REPO_DIR/.env into this process (values not printed)"
-fi
+# Chained on the result, not `-f`: a refused HOME file must not shadow the repo copy.
+_source_dotenv "$ENV_FILE" || _source_dotenv "$REPO_DIR/.env" || true
 
 if [ -z "${CYCLAW_API_KEY:-}" ]; then
   if [ "$SKIP_KEYS" -eq 1 ]; then
@@ -507,12 +531,8 @@ PY
   )
 
   # Reload so a newly supplied DEEPAGENT_API_KEY / DB URL reaches the servers.
-  if [ -f "$ENV_FILE" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "$ENV_FILE"
-    set +a
-  fi
+  # Same mode gate as the initial load: existence is not the same as loadable.
+  _source_dotenv "$ENV_FILE" || true
 }
 
 configure_advanced_keys
