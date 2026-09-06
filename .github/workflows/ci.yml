@@ -1290,7 +1290,7 @@ jobs:
               case "$skill" in
                 CyClaw-Sandbox|index-doctor) profile=heavy ;;
                 config-guard|doc-sync|injection-redteam) profile=yaml ;;
-                cyclaw-advisor|dep-guard|invariant-guard|otel-hardening|verify-deps) profile=stdlib ;;
+                cyclaw-advisor|cyclaw-gotchas|dep-guard|invariant-guard|otel-hardening|verify-deps) profile=stdlib ;;
                 *)
                   # Unknown skills must fail closed: a silent stdlib default can
                   # skip-green when the verifier needs PyYAML/runtime the stdlib
