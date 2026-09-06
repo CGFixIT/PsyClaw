@@ -160,12 +160,16 @@ class HarnessChatClient:
         than reuse the closed client.
         """
         old = self._client
-        _shutdown_inflight_sockets(old)
+        # Publish the replacement before waking the blocked POST. Shutdown
+        # unblocks chat(), whose finally can drop GenerationGate before
+        # old.close() returns. A retry that started on old would then die
+        # in close().
         self._client = httpx.Client(
             timeout=self._timeout_sec,
             transport=self._transport,
             trust_env=False,
         )
+        _shutdown_inflight_sockets(old)
         old.close()
 
     def chat(

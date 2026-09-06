@@ -1206,7 +1206,9 @@ def test_abort_in_flight_unblocks_hung_post():
         worker = threading.Thread(target=_call, daemon=True)
         worker.start()
         assert entered.wait(3)
+        before = chat._client
         chat.abort_in_flight()
+        assert chat._client is not before
         worker.join(2)
         assert not worker.is_alive()
         assert "err" in result
