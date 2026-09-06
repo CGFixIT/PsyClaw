@@ -14,10 +14,14 @@ one.
 
 ## Workflow
 
-1. Use fresh `origin/main` for a baseline audit. To verify a PR, use an isolated
-   checkout of its exact head (`--branch` selects it), record its base, and do
-   not replace the candidate with main. `--in-place` is intended for disposable
-   prepared checkouts; the runner temporarily rewrites config and can build data.
+1. Use fresh `origin/main` for a baseline audit. To verify a PR, pass its exact
+   head to `--ref` (a commit SHA or `refs/pull/<N>/head`): the runner clones,
+   fetches that ref, detaches at it, and records the resolved SHA in the report.
+   `--branch` accepts only a branch or tag name (`git clone --branch`), and a
+   branch can move mid-audit, so it is not exact-head evidence. Record the PR's
+   base and do not replace the candidate with main. `--in-place` is intended for
+   disposable prepared checkouts; the runner temporarily rewrites config and can
+   build data.
 2. Use `py -3.12` on Windows or `python3.12` on macOS/Linux for every command
    below. Run the static guards before spending time on a clean install:
 
@@ -41,6 +45,12 @@ py -3.12 .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --repo-ur
 
 # macOS/Linux
 python3.12 .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git
+```
+
+To audit a PR head instead of main:
+
+```text
+<python-3.12> .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git --ref refs/pull/<N>/head
 ```
 
 For an already-prepared checkout, skip the heavy setup:

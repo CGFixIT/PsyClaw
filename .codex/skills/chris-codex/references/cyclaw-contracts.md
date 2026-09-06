@@ -13,8 +13,10 @@ scope. Code establishes behavior; it does not authorize changing policy.
   the graph enforces confirmation, selected provider, and client availability.
   Destination allowlists and hooks can restrict access, not replace consent.
 - I4: all graph paths converge on audit_logger and then END.
-- I5: soul evolution needs a human reason, injection scanning, and atomic write.
-  Missing soul self-initializes at boot; read-only checks must avoid that write.
+- I5: `/soul/apply` needs a human reason, the injection scan, and an atomic
+  write. The scan is write-path-only: restore, startup drift recovery, and
+  `/soul/reload` adopt content unscanned (INVARIANTS.md Rule 5). Missing soul
+  self-initializes at boot; read-only checks must avoid that write.
 - I6: gate.py, gate_ops.py, gate_auth.py, gate_memory.py, graph.py, and
   mcp_hybrid_server.py must not import agentic, sync, guardrails, harness,
   telegram, or opentweet. Use maintained bridges/subprocess boundaries.

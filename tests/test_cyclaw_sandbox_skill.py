@@ -112,3 +112,39 @@ def test_prepare_repo_stops_after_required_setup_failure(tmp_path: Path, monkeyp
         runner._prepare_repo(tmp_path, args, results, {})
 
     assert [result.name for result in results] == ["soul scaffold", "create venv"]
+
+
+def test_runner_ref_detaches_at_exact_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_script("run_sandbox_test.py")
+    sha = "39cd7e5ad532bdd45960604b6e388f156e6dd49d"
+    args = SimpleNamespace(in_place=False, work_root=str(tmp_path), branch="main", ref=sha, repo_url="https://x")
+    seen: list[list[str]] = []
+
+    def fake_run(name: str, cmd: list[str], *rest: object, **kwargs: object) -> object:
+        seen.append(cmd)
+        return runner.Result(name, "PASS", "ok")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    results: list = []
+
+    runner._clone_or_use_repo(args, results)
+
+    assert "--branch" not in seen[0] and "--single-branch" not in seen[0]
+    assert seen[1] == ["git", "fetch", "origin", sha]
+    assert seen[2] == ["git", "checkout", "--detach", "FETCH_HEAD"]
+    assert seen[3][:2] == ["git", "rev-parse"]
+    assert [r.name for r in results] == ["clone origin/main", f"fetch {sha}", "checkout ref (detached)", "resolved head"]
+
+
+def test_runner_without_ref_keeps_branch_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_script("run_sandbox_test.py")
+    args = SimpleNamespace(in_place=False, work_root=str(tmp_path), branch="main", ref="", repo_url="https://x")
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        runner, "_run", lambda name, cmd, *a, **k: (seen.append(cmd), runner.Result(name, "PASS", "ok"))[1]
+    )
+
+    runner._clone_or_use_repo(args, [])
+
+    assert len(seen) == 1
+    assert seen[0][:5] == ["git", "clone", "--branch", "main", "--single-branch"]

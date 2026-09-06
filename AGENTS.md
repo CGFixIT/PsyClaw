@@ -60,7 +60,10 @@ and a non-cross-site request; it does not disable auth/RBAC.
    client construction, plus confirmation, selection, and availability in the
    graph. Destination allowlists and pre-action hooks do not replace these gates.
 4. Every graph path converges on `audit_logger`, then END.
-5. Soul writes require a human reason, injection scan, and atomic replacement.
+5. `POST /soul/apply` writes require a human reason, pass the injection scan,
+   and replace atomically. The scan is write-path-only: restore re-applies a
+   vetted `.bak` with `scan=False`, and startup drift recovery and
+   `/soul/reload` adopt on-disk content unscanned (`INVARIANTS.md` Rule 5).
    Missing soul self-initializes at boot; a read-only check must not rewrite it.
 6. Preserve core/out-of-band import isolation and retrieval-only MCP behavior.
 
