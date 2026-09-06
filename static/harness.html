@@ -751,10 +751,11 @@ function buildCommands() {
    fetch helper above never throws for one, and the shared catch in runSlash
    would silently render nothing. Three cases have to be told apart here
    rather than there:
+     HTTP 409 AGENTIC_DISABLED -> agentic.enabled is false (shipped default);
+                                 api() throws before this helper runs
      ok=false            -> the CLI refused or failed; its message is in stderr
-     ok=true,  parsed=null -> agentic.enabled is false, which is the SHIPPED
-                              default; the human banner is in stdout, and
-                              reaching for parsed.run_id would be a TypeError
+     ok=true,  parsed=null -> leftover CLI banner with no JSON (defense in
+                              depth if a caller still lands a 200)
      ok=true,  parsed     -> a real run record */
 function agentRecord(r) {
   if (!r.ok) {

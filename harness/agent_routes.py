@@ -82,6 +82,21 @@ def register_agent_routes(
             )
         return run_id
 
+    def _disabled_layer_success(payload: dict[str, Any]) -> bool:
+        # CLI _disabled_noop / _deepagent_github_disabled_noop exit 0 with a
+        # human banner. That is the operator-facing CLI contract. HTTP callers
+        # cannot treat the same envelope as a successful run, push, or publish
+        # (issue #1337: POST /push on an all-zero run id returned 200 + ok=true).
+        if payload.get("ok") is not True:
+            return False
+        stdout = payload.get("stdout") or ""
+        if not isinstance(stdout, str):
+            return False
+        return (
+            "Agentic layer disabled" in stdout
+            or "real-repo coding subsystem disabled" in stdout
+        )
+
     def _agentic_call(action: str, call: Callable[[], OpsResult]) -> dict:
         """Run one shim call, mapping every failure into the console's envelope.
 
@@ -97,9 +112,12 @@ def register_agent_routes(
         stderr. That is the same contract GET /api/github/status already has,
         and it is what lets the console distinguish "the run was refused"
         (exit 4) from "the request was malformed" (400) without parsing prose.
+
+        The one exit-0 case that IS translated: the disabled-layer banner.
+        CLI no-op success must not become an HTTP success envelope.
         """
         try:
-            return call().to_dict()
+            payload = call().to_dict()
         except OpsError as exc:
             raise hs._err(hs._HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
         except subprocess.TimeoutExpired as exc:
@@ -116,6 +134,16 @@ def register_agent_routes(
                 hs._HTTP_BAD_GATEWAY,
                 AgenticError(f"{action} shim failed: {redact_sensitive(str(exc))}", code="SHIM_IO_ERROR"),
             ) from exc
+        if _disabled_layer_success(payload):
+            raise hs._err(
+                hs._HTTP_CONFLICT,
+                AgenticError(
+                    "agentic layer is disabled; nothing was executed",
+                    code="AGENTIC_DISABLED",
+                    details={"action": action},
+                ),
+            )
+        return payload
 
     @app.get("/api/agent/checks")
     def agent_checks() -> dict:

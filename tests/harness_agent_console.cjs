@@ -145,7 +145,8 @@ async function refusals() {
     [typed(500, 'OPS_FAILED', 'operation failed'), /confirm failed — staged run kept.*OPS_FAILED/],
     [{status: 200, body: {ok: false, label: 'agent-run', exit_code: 4,
       stderr: 'explicit confirmation required', parsed: null}}, /exit 4\).*explicit confirmation required/s],
-    [{status: 200, body: {ok: true, stdout: 'agentic.enabled is false', parsed: null}}, /disabled in config.yaml — nothing ran/],
+    [typed(409, 'AGENTIC_DISABLED', 'agentic layer is disabled; nothing was executed'),
+      /confirm failed — staged run kept.*AGENTIC_DISABLED/],
   ];
   for (const [response, expected] of responses) {
     const b = browser(() => response);
