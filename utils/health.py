@@ -182,6 +182,12 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     try:
         from llm.client import resolve_local_backend
 
+        # Trust the configured primary URL before resolve_local_backend.
+        # When fallback.enabled, that resolver probes primary first; /health
+        # must not discover an untrusted host (and must not send its API key).
+        primary_url = str(llm_cfg.get("base_url") or "").strip()
+        if primary_url:
+            assert_local_destination(primary_url, llm_cfg.get("trusted_hosts", []))
         resolved = resolve_local_backend(llm_cfg)
         llm_base = resolved.base_url
         local_model = resolved.model or ""
@@ -189,6 +195,14 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         local_headers = (
             {"Authorization": f"Bearer {resolved.api_key}"} if resolved.api_key else None
         )
+    except EndpointTrustError as exc:
+        results.append(HealthStatus(
+            name="local_llm", healthy=False, error=_safe_error(exc),
+        ))
+        llm_base = None
+        local_model = ""
+        local_name = "local_llm"
+        local_headers = None
     except Exception as exc:
         # Resolver validation (e.g. fallback enabled without model) should not
         # 500 the whole /health payload — surface as unhealthy local status.
