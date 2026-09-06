@@ -75,8 +75,9 @@ def _shutdown_inflight_sockets(client: httpx.Client) -> None:
         stream = getattr(inner, "_network_stream", None)
         sock = getattr(stream, "_sock", None)
         if sock is None:
-            extra = getattr(stream, "get_extra_info", None)
-            sock = extra("socket") if callable(extra) else None
+            # Bandit B610 matches any call named extra() as Django QuerySet.extra.
+            get_extra_info = getattr(stream, "get_extra_info", None)
+            sock = get_extra_info("socket") if callable(get_extra_info) else None
         if sock is None:
             continue
         with suppress(OSError, AttributeError, TypeError):
