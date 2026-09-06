@@ -1,34 +1,40 @@
 ---
 name: cyclaw-project-guidance
-description: Read current CyClaw repository guidance, architecture, security invariants, commands, tests, and product constraints before substantive work in CGFixIT/CyClaw. Use for code, configuration, CI, dependency, security, agentic, sync, retrieval, or roadmap changes.
+description: Read current CyClaw architecture, operating rules, configuration, and verification sources before substantive repository work.
 ---
 
 # CyClaw Project Guidance
 
-Read current repository sources instead of copied snapshots:
+Read `AGENTS.md`, `CLAUDE.md`, and `.codex/Codex_instructions.md`, then the
+smallest relevant source set below. Code and config outrank copied snapshots.
+This refresh was checked against `origin/main@ef76d7f7` on 2026-09-06; fetch
+and inspect the live diff before carrying those observations forward.
 
-1. `AGENTS.md` for the Codex map, repo layout, commands, and safety rules.
-2. `CLAUDE.md` for the detailed architecture and operating contract.
-3. `.github/copilot-instructions.md` and active workflows for current CI commands.
-4. `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security-sensitive work.
-5. The current code, `config.yaml`, tests, and subsystem docs for the requested scope.
+| Task | Sources |
+|---|---|
+| Routing, local/container models | `graph.py`, `utils/endpoint_trust.py`, `llm/client.py`, `config.yaml`, `tests/test_endpoint_trust.py`, `tests/test_graph.py` |
+| Auth or public HTTP surface | `gate.py`, `gate_auth.py`, `utils/auth.py`, `utils/authn_manager.py`, `INVARIANTS.md`, `docs/THREAT_MODEL.md` |
+| Harness/agent runs | `harness/server.py`, `harness/agent_routes.py`, `agentic/executor/`, `utils/tool_broker.py`, `docs/agentic/` |
+| Install, launch, or dependencies | `setup-guide.md`, `macos/`, `powershell/`, manifests, Docker, active workflows |
+| Skills/docs | `.codex/README.md`, relevant skill plus UI metadata, `.claude/skills/doc-sync/` |
 
-Current main also includes optional auth, memory, and harness surfaces. Treat route presence and implementation as distinct from shipped configuration: verify each master switch in `config.yaml` before describing them as enabled or part of the core request path.
+Current contracts that old guidance often misses:
 
-For roadmap, optimization, or packaging work, also read the current business
-sources linked from `AGENTS.md`. Treat dated market conclusions as dated.
+- Both local answer nodes enforce loopback or `models.local_llm.trusted_hosts`;
+  malformed URLs produce typed endpoint-trust failures. An explicitly trusted
+  host receives local context/soul; cloud-provider confirmation is separate.
+- Auth Stage 3 is wired to `/query` only when auth is enabled; same-origin is
+  always enforced. API-key optional bypass has peer/proxy/origin conditions.
+- Hybrid and both providers ship enabled, while auth/memory/agentic/guardrails
+  master switches ship off. Read actual config before changing or reporting them.
+- Darwin dotenv loaders pin `/usr/bin/stat`, enforce 600/400, preserve source
+  failure status for fallback, and restore the prior allexport state.
+- Core/out-of-band isolation covers all six core modules and the package list
+  in the maintained invariant checker, including OpenTweet.
 
-Verify mutable facts such as model IDs, dependency versions, workflow commands,
-and branch state from current sources before relying on them.
+For any behavior-sensitive change, trace callers and nearest tests. Read
+`INVARIANTS.md` and the threat model for trust boundaries. Use the relevant
+checker; never change runtime behavior merely to satisfy stale prose.
 
-Preserve these invariants:
-
-- retrieval runs before any LLM call
-- graph edges enforce routing policy
-- external fallback remains provider-enabled, hybrid-mode, and human-confirmed
-- every execution path converges on audit logging
-- soul mutation requires an explicit human reason
-- optional `agentic/`, `sync/`, and `guardrails/` code stays out of the core request path
-
-Prefer polish, proof, testability, packaging, and repo coherence over speculative
-features unless the user explicitly asks for new product behavior.
+For roadmap work, use current project/product docs. Dated market conclusions
+are not current measurements, and this skill does not authorize new features.

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Codex Engineering Continuity"
+  short_description: "Evidence-based repository work and CyClaw context"
+  default_prompt: "Use $chris-codex to handle this engineering task with current repository evidence, scoped implementation, and meaningful verification."
+policy:
+  allow_implicit_invocation: true

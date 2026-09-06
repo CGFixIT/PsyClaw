@@ -25,7 +25,9 @@ checks; this Codex skill is their safe operating guide.
 
 3. Classify each difference as base, optional, platform-specific, transitive,
    or an accepted documented exception. Keep CPU Torch install order and the
-   plain-macOS Torch exception intact.
+   plain-macOS Torch exception intact. The root `environment.yml` is the Conda
+   profile; `.github/workflows/environment.yml` is a linted workflow no-op,
+   not another dependency manifest.
 4. Use dry-run installs only for the selected surface. Validate Docker/Conda
    separately when those files change; do not treat a host-pip success as a
    container proof.

@@ -208,16 +208,29 @@ def _clone_or_use_repo(args: argparse.Namespace, results: list[Result]) -> Path:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     repo = work_root / f"cyclaw-sandbox-test-{stamp}"
     env = os.environ.copy()
-    clone = _run(
-        "clone origin/main",
-        ["git", "clone", "--branch", args.branch, "--single-branch", args.repo_url, str(repo)],
-        work_root,
-        env,
-        180,
-    )
+    ref = getattr(args, "ref", "") or ""
+    if ref:
+        # A PR head is a commit, not a branch: `git clone --branch` only accepts
+        # branch/tag names, and a branch can move while the audit runs. Clone the
+        # default branch, fetch the exact ref (a SHA or refs/pull/N/head), and
+        # detach at it so the report names the commit that was actually tested.
+        clone_cmd = ["git", "clone", args.repo_url, str(repo)]
+    else:
+        clone_cmd = ["git", "clone", "--branch", args.branch, "--single-branch", args.repo_url, str(repo)]
+    clone = _run("clone origin/main", clone_cmd, work_root, env, 180)
     results.append(clone)
     if clone.status != "PASS":
         raise RuntimeError(clone.detail.replace(args.repo_url, "<repo-url>"))
+    if ref:
+        fetch = _run(f"fetch {ref}", ["git", "fetch", "origin", ref], repo, env, 180)
+        results.append(fetch)
+        if fetch.status != "PASS":
+            raise RuntimeError(fetch.detail.replace(args.repo_url, "<repo-url>"))
+        detach = _run("checkout ref (detached)", ["git", "checkout", "--detach", "FETCH_HEAD"], repo, env, 60)
+        results.append(detach)
+        if detach.status != "PASS":
+            raise RuntimeError(detach.detail)
+        results.append(_run("resolved head", ["git", "rev-parse", "HEAD"], repo, env, 30))
     return repo
 
 
@@ -463,7 +476,12 @@ def _write_report(results: list[Result]) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-url", default="https://github.com/CGFixIT/CyClaw.git")
-    parser.add_argument("--branch", default="main")
+    parser.add_argument("--branch", default="main", help="Branch or tag name to clone (git clone --branch).")
+    parser.add_argument(
+        "--ref",
+        default="",
+        help="Commit SHA or fetchable ref (e.g. refs/pull/123/head) to detach at after cloning; overrides --branch.",
+    )
     parser.add_argument("--work-root", default="")
     parser.add_argument("--in-place", action="store_true", help="Run in the current checkout instead of cloning.")
     parser.add_argument("--skip-install", action="store_true", help="Use the current Python environment.")

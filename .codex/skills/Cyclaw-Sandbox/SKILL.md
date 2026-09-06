@@ -18,13 +18,16 @@ The copied runners are kept in that directory: `run_full_verification.py`,
 `/cyclaw-sandbox`; it is explicit-only and does not replace Claude's skill.
 
 The goal is an evidence-backed sandbox report, not a claim that one host proves
-all platforms. Pin every result to the tested `origin/main` SHA and label each
+all platforms. Pin every result to the actual tested baseline or PR-head SHA and label each
 check `PASS`, `FAIL`, `SKIP`, or `NOT RUN` with the command and reason.
 
 ## Safety and authority
 
-1. Fetch `origin/main` before inspection. Use a fresh detached clone or
-   detached worktree; never run the full verifier against a feature branch.
+1. Fetch `origin/main` before a baseline audit. Use a detached worktree/clone
+   of main for baseline claims, or of the exact PR head for fix verification.
+   Never let a runner switch the candidate to main. Set `CYCLAW_REPO` to the
+   disposable checkout and `CYCLAW_SKIP_ENSURE=1` for the Python driver;
+   `_ensure_repo` otherwise performs checkout/pull.
 2. Isolate `CYCLAW_HOME`, `XDG_CONFIG_HOME`, `HOME`-equivalent temp state,
    `index/`, `logs/`, and server ports. Preserve committed
    `data/personality/soul.md`; do not expose corpus contents or raw audit lines.
@@ -45,14 +48,15 @@ check `PASS`, `FAIL`, `SKIP`, or `NOT RUN` with the command and reason.
 Record the current SHA, Python version, package/runtime availability, and live
 configuration before running tests. Verify rather than copy these values:
 
-- `config.yaml`: `app.mode`, loopback `api.host`/`port`, local model and
+- `config.yaml`: `app.mode`, loopback `api.host`/`port`, local `trusted_hosts`, local model and
   `fallback` model, provider enablement, retrieval `rrf_k` and `min_score`,
   auth/memory/agentic/guardrails/fsconnect/sqlconnect/sync/Telegram/OpenTweet
   switches, Numbat, and harness defaults.
 - `graph.py`: count live `graph.add_node` calls (current main is expected to
   have 12, including `pre_action_hook_grok` and `pre_action_hook_claude`),
   confirm `retrieve` is entry, policy routers are conditional edges, and every
-  path converges at `audit_logger`.
+  path converges at `audit_logger`. Both local answer nodes must preserve typed
+  malformed-URL errors, default loopback trust, and explicit trusted-host access.
 - `gate.py`, `gate_auth.py`, `gate_memory.py`, `gate_ops.py`,
   `harness/server.py`, `static/terminal.html`, and `static/harness.html`:
   derive the actual route table and browser fetch calls instead of assuming
@@ -66,7 +70,12 @@ configuration before running tests. Verify rather than copy these values:
 Run the ladder in order. The bundled `run_full_verification.py` is the
 in-process/mock driver; `verify.sh` is the CI-shaped lifecycle driver. They
 complement the focused checks below and do not make browser, native-platform,
-or live optional-service claims by themselves.
+or live optional-service claims by themselves. Read runner setup/cleanup before
+execution: `verify.sh` provisions a venv and mutates sandbox files, and the Python
+driver supplies dependency stubs. A stubbed phase does not prove real package
+compatibility. Use a unique disposable venv path, not an existing user venv.
+`NEW_SKILL.md` and `sandbox-findings-report.md` are historical records; their
+old PASS results do not validate the current checkout.
 
 ### 0. Fresh baseline and inventory
 
@@ -105,7 +114,9 @@ smoke result. On Windows, validate the PowerShell 5.1 parser contract and
 PowerShell smoke; on macOS, validate plain `torch==2.13.0` and removal of
 Linux `+cpu`/PyTorch-index lines from temporary manifests. Do not call a
 Windows or macOS profile PASS from a different operating system; mark the
-native lane `SKIP` and cite CI/native evidence instead.
+native lane `SKIP` and cite CI/native evidence instead. Include dotenv mode
+600/400, absolute BSD stat under a GNU-shadowed PATH, failed HOME sourcing
+falling back to the repo file, and preserved shell allexport state.
 
 ### 2. Static quality, unit, integration, and security gates
 
@@ -116,7 +127,7 @@ are installed:
 python -m pytest tests/ -q --tb=short
 python -m tests.ci_rag_smoke
 ruff check --select E,F,I,B,C4,UP,S .
-python .codex/skills/invariant-guard/check_invariants.py --repo-root .
+python .claude/skills/invariant-guard/check_invariants.py --repo-root .
 ```
 
 Also run the relevant focused groups, not only the aggregate suite:
@@ -213,6 +224,11 @@ host. Derive and probe every current route, including:
 - `/ops/sync`, `/ops/agentic`, `/ops/fsconnect`, `/ops/sqlconnect`;
 - auth and memory routes when their current config/test profile enables them.
 
+Auth Stage 3 protects `/query` when enabled; same-origin applies always. For
+key-gated routes, verify the configured optional-key peer/proxy/origin bypass
+separately from session/device-token authentication. Never infer that keyless
+loopback success proves the route is universally unauthenticated.
+
 Check status codes for missing keys, missing reasons, invalid origins, rate
 limits, schema errors, disabled optional layers, and successful read-only
 operations. Never execute a real agentic write, SQL mutation, filesystem
@@ -268,7 +284,7 @@ On native Windows run `windows-smoke.ps1` with the mock provider and isolated
 homes. On native macOS run `macos-smoke.sh` with the same contract. Both must
 cover the gateway and harness live HTTP surfaces and be compared for endpoint
 parity. On Linux, run static/platform simulation checks only and label the live
-bombs `SKIP`.
+native-only lanes `SKIP`.
 
 Also verify platform installers, launchers, Keychain/CredMan wrappers,
 launchd/Task Scheduler generators, scheduler backend selection, and refusal of
@@ -282,7 +298,7 @@ Use this compact final record, expanding it with exact commands and failures:
 
 ```text
 CyClaw sandbox
-HEAD: <origin/main SHA>
+HEAD: <tested SHA; baseline or PR head>
 Python: <version>
 Install profiles: manual <P/F/S>, installer <P/F/S>, one-shot <P/F/S>
 Graph nodes: <live add_node count>

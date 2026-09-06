@@ -7,7 +7,9 @@ description: Reconcile CyClaw documentation with current code, configuration, co
 
 Use the maintained checker under `.claude/skills/doc-sync/` as the single
 mechanical implementation. This Codex skill defines how to use its evidence
-without copying a second parser or treating prose as executable truth.
+without copying a second parser or treating prose as executable truth. The
+repo-local `doc_sync.py` and `verify.sh` here forward to that maintained checker
+and self-test, preserving the existing Codex command paths.
 
 ## Workflow
 
@@ -33,7 +35,10 @@ without copying a second parser or treating prose as executable truth.
    user, not a documentation repair.
 5. When skills change, update both `AGENTS.md` and `.codex/README.md`; verify
    every Codex skill has `SKILL.md`, `agents/openai.yaml`, and a default prompt
-   containing its exact `$skill-name`.
+   containing its exact `$skill-name`. Parse the frontmatter and UI metadata;
+   the Claude doc-sync checker does not validate the complete Codex inventory.
+   Preserve `allow_implicit_invocation` and unrelated interface fields. The
+   historical `Cyclaw-Sandbox` directory intentionally invokes `$cyclaw-sandbox`.
 6. Re-run the checker and `git diff --check`. Use the shell self-test below
    when the environment can run it.
 
@@ -44,8 +49,12 @@ bash .claude/skills/doc-sync/verify.sh
 git diff --check
 ```
 
-On Windows without Bash, run the Python checker directly and explicitly report
-that its mutation self-test was not run. Do not claim a clean checker result
+The shell mutation self-test requires native POSIX path handling. Git Bash
+with Windows Python can pass `/c/...` paths inside `python -c` strings unchanged,
+causing fixture setup to fail. On that combination, run the Python checker
+directly and report the self-test limitation; do not label a fixture-path error
+as product drift or a passing mutation test. A temporary Python-built fixture
+can still verify CLI argument forwarding and expected drift exit codes. Do not claim a clean checker result
 validates newly invented behavior, live integrations, or an untested command.
 
 ## Publication boundary

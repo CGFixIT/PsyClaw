@@ -9,6 +9,11 @@ Use this for a focused telemetry-boundary review. The maintained checker under
 `.claude/skills/otel-hardening/` is the single static implementation; this
 skill provides the Codex workflow around it.
 
+The canonical maps, scrubbed credential/config keys, and child environment
+builders live in `utils/telemetry_kill.py`. ONNX suppression also has API load
+seams in `utils/onnx_telemetry.py`. An environment-variable inventory alone is
+not complete proof, and these controls do not block all network traffic.
+
 ## Workflow
 
 1. Read the target diff, `utils/telemetry_kill.py`, affected imports, startup

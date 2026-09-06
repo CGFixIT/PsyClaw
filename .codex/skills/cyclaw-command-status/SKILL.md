@@ -14,7 +14,7 @@ Do not install, start, rebuild, or mutate anything during this workflow.
 
 ```bash
 python --version
-python -c "import fastapi, uvicorn, chromadb, langchain_core; print('core imports OK')"
+python -c "from utils.telemetry_kill import apply_telemetry_kill; apply_telemetry_kill(); import fastapi, uvicorn, chromadb, langchain_core; print('core imports OK')"
 ```
 
 3. Check the configured runtime paths. Current defaults are
@@ -38,8 +38,11 @@ python -m pytest tests/test_telemetry_kill.py -q
 ```
 
 Flag a non-3.12 Python, failed imports, missing configured runtime paths,
-non-loopback host, unexpectedly enabled external providers, failed telemetry
-checks, or health readiness inconsistent with the local environment.
+a bind/endpoint inconsistent with the operator's configured deployment, failed
+telemetry checks, or health readiness inconsistent with the local environment.
+Hybrid and both providers enabled are shipped defaults, not drift by themselves;
+confirmation still gates external answers. Inspect `trusted_hosts`,
+`security.api_key_optional`, and auth separately before evaluating trust.
 
 Report checks that were skipped because the server or optional dependencies
 were unavailable. Do not treat a stopped Ollama, Postgres, rclone, or GitHub

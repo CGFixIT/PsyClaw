@@ -14,7 +14,14 @@ one.
 
 ## Workflow
 
-1. Work from a fresh `origin/main` clone unless the user explicitly asks for the current checkout.
+1. Use fresh `origin/main` for a baseline audit. To verify a PR, pass its exact
+   head to `--ref` (a commit SHA or `refs/pull/<N>/head`): the runner clones,
+   fetches that ref, detaches at it, and records the resolved SHA in the report.
+   `--branch` accepts only a branch or tag name (`git clone --branch`), and a
+   branch can move mid-audit, so it is not exact-head evidence. Record the PR's
+   base and do not replace the candidate with main. `--in-place` is intended for
+   disposable prepared checkouts; the runner temporarily rewrites config and can
+   build data.
 2. Use `py -3.12` on Windows or `python3.12` on macOS/Linux for every command
    below. Run the static guards before spending time on a clean install:
 
@@ -38,6 +45,12 @@ py -3.12 .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --repo-ur
 
 # macOS/Linux
 python3.12 .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git
+```
+
+To audit a PR head instead of main:
+
+```text
+<python-3.12> .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git --ref refs/pull/<N>/head
 ```
 
 For an already-prepared checkout, skip the heavy setup:
@@ -110,6 +123,14 @@ its dependency bootstrap is Linux-oriented.
   Grok/Claude against the loopback mock, then restores the exact original text
   before writing the report.
 - Use `--skip-install` only when dependencies are already installed. Use `--skip-index` only when the index already exists.
+
+## Evidence limits
+
+Provider client checks against a loopback mock do not prove production
+`assert_online_destination` allowlists or the whole graph consent path. Pair
+those connection checks with `tests/test_endpoint_trust.py` and graph tests.
+Test both local nodes for malformed/untrusted URLs and explicit trusted host
+access. Report mock fidelity, platform skips, and the actual tested SHA.
 
 ## Scripts
 

@@ -35,7 +35,10 @@ the operator; do not interpolate untrusted shell input.
 Include total and RAG-query counts, event breakdown, score min/mean/max,
 retrieval modes, model usage, online escalations, and audit-integrity counters.
 Flag malformed records, plaintext queries, unexpected external-model activity,
-and material error or refusal spikes.
+and material error or refusal spikes. `logs/audit.jsonl` is authoritative;
+Numbat output is a derived fail-soft projection, not a second count of the same
+activity. An offline-best-effort answer still uses the local model. Inspect
+`llm_model`, `model_used`, and the current metrics schema before aggregating.
 
 Do not paste raw queries, corpus content, API keys, or complete audit records.
 Never commit files under `logs/`.

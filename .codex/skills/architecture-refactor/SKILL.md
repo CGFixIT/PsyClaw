@@ -45,4 +45,6 @@ failures. Do not weaken tests to make a refactor pass.
 
 One concern per commit and draft PR. Never use `/code-review`, `/tmp` trackers,
 or Claude-only commands as required steps; use the active Codex tools and a
-workspace-local note when a tracker is genuinely useful. Never force-push.
+workspace-local note when a tracker is useful. Rewriting an existing remote
+branch needs authorization and an exact-SHA force-with-lease; respect any
+existing authorization rather than asking for the same action again.

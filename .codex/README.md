@@ -31,6 +31,7 @@ in the same change.
 
 | Skill | Use it for |
 | --- | --- |
+| `chris-codex` | Public-safe engineering continuity; model-aware implicit preference and explicit use on any model. |
 | `fable-protocol` | Evidence-first reasoning and hostile self-review on substantive work. |
 | `add-comment` | Add bounded WHY comments without changing executable behavior. |
 | `architecture-refactor` | Make one measured, behavior-preserving architecture cleanup. |
@@ -38,20 +39,20 @@ in the same change.
 | `doc-sync` | Reconcile code-derived facts and CyClaw documentation after structural changes. |
 | `invariant-guard` | Check CyClaw's six security invariants after sensitive changes. |
 | `injection-redteam` | Probe sanitizer regressions and adversarial bypasses. |
-| `verification-specialist` | Independently verify a change with executed evidence and a verdict. |
+| `verification-specialist` | Read-only verification with checks scoped to the supplied change and explicit limits. |
 | `cyclaw-project-guidance` | Load CyClaw invariants, architecture, and canonical references before substantial work. |
 | `cyclaw-advisor` | Read-only current-main architecture, operations, and PR advice. |
 | `verify-dep` | Reconcile dependency/install profiles, Docker, platform installers, and supply-chain checks. |
 | `cyclaw-run-cyclaw` | Prepare, index, start, and verify the local RAG gateway. |
 | `cyclaw-sandbox-test` | Fresh-main sandbox and mocked API/terminal smoke coverage. |
-| `Cyclaw-Sandbox` | Full current-main sandbox: REST, terminal, harness, audit, installers, platforms, CI, and browser evidence. |
+| `Cyclaw-Sandbox` (`$cyclaw-sandbox`, explicit-only) | Full baseline or exact-PR-head sandbox: REST, terminal, harness, audit, installers, platforms, CI, and browser evidence. |
 | `cyclaw-command-status` | Read-only environment and readiness status. |
 | `cyclaw-command-run` | Focused endpoint and local-runtime smoke checks. |
 | `cyclaw-command-audit` | Privacy-safe audit-log analysis. |
 | `cyclaw-command-check-soul` | Read-only soul presence, hash, readability, and drift checks. |
 | `otel-hardening` | Re-verify telemetry-kill wiring and dependency phone-home controls. |
 | `refactor` | Behavior-preserving structural or measured performance work. |
-| `cyclaw-optimize` | Evidence-backed, focused optimization PRs. |
+| `cyclaw-optimize` | Evidence-backed improvements; implementation and draft publication follow user scope. |
 
 ### Routines
 
@@ -64,6 +65,25 @@ in the same change.
 | `test-and-verify.md` | Select and report targeted, CI-parity, or static checks. |
 | `pr-review.md` | Review a PR or diff with findings first. |
 | `security-review.md` | Review trust boundaries, secrets, routing, dependencies, and optional layers. |
+
+## Current-source discipline
+
+The skills were reconciled with `origin/main@ef76d7f7` on 2026-09-06. Fetch and
+inspect current code before reusing observations. In particular, local model
+trust now covers both answer paths with explicit trusted-host support; auth
+Stage 3 is wired; macOS dotenv helpers preserve source status and pin BSD stat;
+and actionlint includes all workflow YAML files. See `$cyclaw-project-guidance`
+for the source map instead of copying another runtime snapshot.
+
+All 22 skill entry points have UI metadata. The directory `Cyclaw-Sandbox`
+keeps its historical spelling; its skill/invocation name is `cyclaw-sandbox`.
+The optimization skill consistently uses `cyclaw-optimize`. Preserve existing
+invocation policy when updating metadata.
+
+Use the canonical `.claude/skills/doc-sync/` checker. The Codex Python/shell
+entry points are wrappers, not separate parser implementations. Historical
+sandbox reports and `NEW_SKILL.md` describe prior runs only. Validate actual
+commands and paths, not just the presence of a skill name in this table.
 
 ## Prompt Templates
 

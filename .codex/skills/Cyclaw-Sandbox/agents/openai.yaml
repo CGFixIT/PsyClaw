@@ -1,6 +1,6 @@
 interface:
   display_name: "CyClaw Sandbox"
   short_description: "Full current-main CyClaw sandbox verification"
-  default_prompt: "Use $cyclaw-sandbox to run evidence-backed current-main verification across CyClaw RAG, REST, terminal, harness, audit, installers, platform lanes, CI, and browser rendering."
+  default_prompt: "Use $cyclaw-sandbox to run evidence-backed verification of current main or the requested PR head across CyClaw RAG, REST, terminal, harness, audit, installers, platform lanes, CI, and browser rendering."
 policy:
   allow_implicit_invocation: false
