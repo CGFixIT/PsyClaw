@@ -147,6 +147,11 @@ Do **not** bake Ollama or model weights into the CyClaw image.
 - **Linux host network:** point `config.yaml` `models.local_llm.base_url` at a
   reachable host address. From a bridge network container, `host.docker.internal`
   may require `extra_hosts: ["host.docker.internal:host-gateway"]` on Linux.
+- For a non-loopback model, also set `models.local_llm.trusted_hosts` to an
+  explicit list such as `["host.docker.internal"]`. Both local answer paths
+  require this opt-in. Trust only a model you operate: it receives local context
+  and soul text without cloud-provider confirmation. This is exact host matching,
+  not DNS/IP pinning. Keep the list empty for loopback-only deployments.
 - Prefer keeping the model on the host and treating network egress as an explicit
   operator choice (Falco outbound rules assume loopback/local Ollama by default).
 

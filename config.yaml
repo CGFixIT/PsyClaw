@@ -30,6 +30,8 @@ app:
 
 models:
   local_llm:
+    # Operator-owned model hosts for container/LAN access; receive local context.
+    trusted_hosts: []  # Exact hostnames/IPs; loopback is always allowed.
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - Ollama loopback, offline-only
     # Optional. Leave commented for a default (unauthenticated) Ollama server —

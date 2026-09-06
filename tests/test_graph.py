@@ -1952,3 +1952,22 @@ class TestLLMIdentityMappings:
         identity = _llm_identity("offline-best-effort", cfg)
         assert identity["llm_model"] == "qwen-test"
         assert "offline best-effort local" in identity["llm"]
+
+
+@pytest.mark.parametrize("node,model", [(local_llm_node, "local"), (offline_best_effort_node, "offline-best-effort")])
+@pytest.mark.parametrize("url,hosts,allowed", [
+    ("http://[::1", [], False),
+    ("http://host.docker.internal:11434/v1", [], False),
+    ("http://host.docker.internal:11434/v1", ["host.docker.internal"], True),
+    ("https://api.x.ai/v1", ["host.docker.internal"], False),
+])
+def test_local_nodes_endpoint_trust(node, model, url, hosts, allowed):
+    llm = TestNodeErrorRecovery._SpyLLM()
+    cfg = {"models": {"local_llm": {"base_url": url, "trusted_hosts": hosts}}}
+    out = node({"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg)
+    assert llm.called is allowed
+    assert out["answer_model"] == model
+    if allowed:
+        assert "error" not in out
+    else:
+        assert out["error"].startswith("ENDPOINT_TRUST")
