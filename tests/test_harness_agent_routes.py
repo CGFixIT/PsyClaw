@@ -645,25 +645,42 @@ def test_a_failed_run_is_an_http_200_carrying_ok_false(cfg, monkeypatch, exit_co
     }
 
 
-def test_the_disabled_layer_returns_ok_true_with_a_null_parsed(cfg, monkeypatch):
-    """The SHIPPED default. agentic.enabled is false, so the CLI prints a human
-    banner and exits 0 -- ok=true, but parsed is null because the banner is not
-    JSON. A console dereferencing parsed.run_id here would throw, so the shape
-    is pinned rather than assumed.
-    """
-    def _disabled(action: str, **_kwargs):
-        return SimpleNamespace(to_dict=lambda: {
-            "subsystem": "agentic", "action": action, "exit_code": 0, "ok": True, "label": "ok",
-            "stdout": "Agentic layer disabled\n", "stderr": "", "parsed": None,
-        })
+_UNKNOWN_RUN_ID = "0" * 32
+_DISABLED_STDOUT = "Agentic layer disabled\n"
 
-    monkeypatch.setattr(harness_server, "run_agentic_op", _disabled)
+
+def _disabled_layer_result(action: str, **_kwargs):
+    """The CLI _disabled_noop envelope: exit 0 / ok=true / human banner, no JSON."""
+    return SimpleNamespace(to_dict=lambda: {
+        "subsystem": "agentic", "action": action, "exit_code": 0, "ok": True, "label": "ok",
+        "stdout": _DISABLED_STDOUT, "stderr": "", "parsed": None,
+    })
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [
+    ("post", _RUN, _VALID_BODY),
+    ("get", f"/api/agent/runs/{_UNKNOWN_RUN_ID}", None),
+    ("post", f"/api/agent/runs/{_UNKNOWN_RUN_ID}/decision", {"decision": "approve"}),
+    ("post", f"/api/agent/runs/{_UNKNOWN_RUN_ID}/push", {}),
+    ("post", f"/api/agent/runs/{_UNKNOWN_RUN_ID}/publish", {"reason": "ship it", "confirm": True}),
+    ("post", f"/api/agent/runs/{_UNKNOWN_RUN_ID}/discard", {}),
+])
+def test_disabled_layer_fail_closes_on_real_repo_routes(cfg, monkeypatch, method, path, body):
+    """Issue #1337: a disabled CLI no-op is not an HTTP success.
+
+    agentic.enabled ships false, so real-repo-run-* print a banner and exit 0
+    before any run-state check. The harness used to forward that as HTTP 200
+    + ok=true, so POST /push on a nonexistent run id looked like a successful
+    push. Fail closed with 409 AGENTIC_DISABLED instead.
+    """
+    monkeypatch.setattr(harness_server, "run_agentic_op", _disabled_layer_result)
     app = harness_server.create_app(cfg, _chat())
     client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
-    body = client.post(_RUN, json=_VALID_BODY).json()
-    assert body["ok"] is True
-    assert body["parsed"] is None
-    assert "disabled" in body["stdout"]
+    resp = client.request(method, path, json=body)
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "AGENTIC_DISABLED"
+    assert "disabled" in detail["message"]
 
 
 # --- status / decision plumbing ---------------------------------------------
