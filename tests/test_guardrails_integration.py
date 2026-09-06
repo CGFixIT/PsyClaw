@@ -361,8 +361,6 @@ def test_iorails_env_fails_engine_startup(monkeypatch):
 
 @pytest.mark.skipif(not NEMO_AVAILABLE, reason="nemoguardrails not installed")
 def test_get_cyclaw_guardrails_loads_with_reasoning_effort():
-    # Issue #1338: shipped models.local_llm.reasoning_effort: "none" used to
-    # nest model_kwargs, and NeMo 0.24's default framework refused to load.
     from guardrails.integration import get_cyclaw_guardrails, reset_rails_singleton
 
     reset_rails_singleton()

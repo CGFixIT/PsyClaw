@@ -122,7 +122,6 @@ def test_nvidia_check_benign_vs_injection_with_enabled_overlay(tmp_path: Path) -
 
 
 def test_get_cyclaw_guardrails_loads_through_enabled_overlay(tmp_path: Path) -> None:
-    """Production load path (not a bypass LLMRails(...) construction)."""
     from guardrails.integration import get_cyclaw_guardrails
 
     path = _write_enabled_overlay(tmp_path)

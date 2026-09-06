@@ -786,9 +786,7 @@ class TestNativeThroughputScript:
 
 
 # =============================================================================
-# 7. Guardrails (NeMo) -- reasoning_effort is a top-level OpenAI-compatible
-# parameter. NeMo 0.24's default framework rejects a nested model_kwargs key
-# (issue #1338). Loopback + Ollama only.
+# 7. Guardrails (NeMo) -- loopback + Ollama only
 # =============================================================================
 
 class _StubModel:

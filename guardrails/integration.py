@@ -123,10 +123,7 @@ def _apply_guardrails_config(rails_config: Any, cfg: GuardrailsConfig) -> None:
         # NeMo 0.24's default framework is its OpenAI-compatible HTTP client,
         # not LangChain. check_langchain_kwargs refuses a nested model_kwargs
         # key and tells the caller to unpack those fields into parameters
-        # (issue #1338). Extra request-body fields therefore live on
-        # parameters itself. The engine/endpoint gate already ran in
-        # load_guardrails_config, so a non-None reasoning_effort is safe
-        # to put on the wire.
+        # (issue #1338).
         nested = params.pop("model_kwargs", None)
         if isinstance(nested, dict):
             for key, value in nested.items():
