@@ -98,3 +98,10 @@ def test_tool_broker_is_measured() -> None:
     assert (_REPO_ROOT / "utils" / "tool_broker.py").exists()
     for lane in _COV_LANES:
         assert "utils.tool_broker" in _cov_flags(lane), f"{lane} does not measure utils.tool_broker"
+
+
+def test_schemas_is_measured() -> None:
+    """schemas is a hatch-packaged HTTP-contract package; keep it on the fail_under gate."""
+    assert (_REPO_ROOT / "schemas").is_dir()
+    for lane in _COV_LANES:
+        assert "schemas" in _cov_flags(lane), f"{lane} does not measure schemas"

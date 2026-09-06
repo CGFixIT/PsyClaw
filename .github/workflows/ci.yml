@@ -50,12 +50,34 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
+      # Same skip as trivy.yml: docs/.claude-only PRs cannot change the image.
+      # Push/schedule still always builds (EVENT_NAME != pull_request).
+      - name: Detect image-relevant changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "docker_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            non_docs=$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -vE '^(docs/|\.claude/)' || true)
+            if [ -n "$non_docs" ]; then
+              echo "docker_changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "docker_changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
       - name: Set up Docker Buildx
+        if: steps.changes.outputs.docker_changed == 'true'
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
       - name: Build image (no push)
+        if: steps.changes.outputs.docker_changed == 'true'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
@@ -245,17 +267,12 @@ jobs:
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
         with:
           fail-on-severity: high
-          # chromadb's pre-auth code-injection advisory is risk-accepted for CyClaw's
-          # embedded PersistentClient: the HTTP server surface that carries the RCE is
-          # never instantiated (docs/THREAT_MODEL.md: "No HTTP DB"). This is the SAME
-          # acceptance already encoded in .osv-scanner.toml (GHSA-f4j7-r4q5-qw2c /
-          # PYSEC-2026-311) and pip-audit.yml (--ignore-vuln CVE-2026-45829) -- all
-          # aliases of one advisory. dependency-review was the one gate still missing
-          # it, so it failed on every PR that touches chromadb's pin. Allow-list the
-          # GHSA form only (the action supports GHSA IDs only); if a new CVE form is
-          # issued or the advisory is re-catalogued, this list will need updating.
+          # chromadb's HTTP-server advisories are risk-accepted for CyClaw's
+          # embedded PersistentClient (docs/THREAT_MODEL.md: "No HTTP DB").
+          # Same set already ignored in .osv-scanner.toml and pip-audit.yml
+          # (CVE-2026-45829/30/31/33). The action takes GHSA IDs only.
           # Every other high/critical advisory still fails this gate. See SECURITY.md.
-          allow-ghsas: GHSA-f4j7-r4q5-qw2c
+          allow-ghsas: GHSA-f4j7-r4q5-qw2c,GHSA-2wm9-hf6c-p5cr,GHSA-xph7-9rjv-w5fr,GHSA-36p7-vc44-83pf
 
   windows-installer-smoke:
     name: windows-2022 / Windows PowerShell 5.1 installer
@@ -986,6 +1003,7 @@ jobs:
             --cov=harness \
             --cov=telegram \
             --cov=opentweet \
+            --cov=schemas \
             --cov-report=xml \
             --cov-report=html \
             --cov-report=term-missing
