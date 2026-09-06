@@ -30,6 +30,8 @@ Full walkthroughs: [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md),
 | Module | Role |
 |---|---|
 | `server.py` | FastAPI app + `static/harness.html` |
+| `agent_routes.py` | The 7 `/api/agent/*` real-repo-run routes, registered onto `server.create_app`'s app |
+| `auth_routes.py` | The `/api/auth/*` session/bootstrap routes, registered the same way |
 | `config.py` | Home layout + read-only view of repo `config.yaml` |
 | `sessions.py` | Per-session JSON + token tallies |
 | `ollama.py` | Local OpenAI-compatible chat client |

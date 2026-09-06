@@ -35,8 +35,8 @@ inference:
 | `memory.py` | Retired | Imported by `builder.py` only |
 | `permissions.py` | Retired | Imported by `builder.py` and `tools.py`; also re-exported from `__init__.py` |
 | `skills.py` | Retired | Imported by `builder.py` only |
-| `subagents.py` | Retired | Imported by `builder.py` only |
-| `tools.py` | Retired | Imported by `builder.py` only |
+| `subagents.py` | Retired | Imported by `builder.py`; also re-exported from `__init__.py` |
+| `tools.py` | Retired | Imported by `builder.py`; also re-exported from `__init__.py` |
 
 Retired here means "not developed further and not on the live path" — not
 "unreachable". `agentic/cli.py`'s `deepagent-plan` subcommand still imports

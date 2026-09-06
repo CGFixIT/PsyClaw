@@ -33,7 +33,8 @@ Accept still requires a human when
 | `mcp/` | `ProposerWorkspaceTools` — **not** an MCP server (see `mcp/README.md`) |
 
 `GitHubCodingRunner` and `loop_driver` are **not** re-exported from
-`__init__.py` (circular import with `agentic.deepagent_github`). Import them
+`__init__.py` (historically a circular import via `agentic.deepagent_github`;
+92afb95 removed that import edge, but they stay off `__all__`). Import them
 from their own modules:
 
 ```text
