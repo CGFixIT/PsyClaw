@@ -31,6 +31,7 @@ in the same change.
 
 | Skill | Use it for |
 | --- | --- |
+| `chris-codex` | Public-safe engineering continuity; model-aware implicit preference and explicit use on any model. |
 | `fable-protocol` | Evidence-first reasoning and hostile self-review on substantive work. |
 | `add-comment` | Add bounded WHY comments without changing executable behavior. |
 | `architecture-refactor` | Make one measured, behavior-preserving architecture cleanup. |
@@ -74,7 +75,7 @@ Stage 3 is wired; macOS dotenv helpers preserve source status and pin BSD stat;
 and actionlint includes all workflow YAML files. See `$cyclaw-project-guidance`
 for the source map instead of copying another runtime snapshot.
 
-All 21 skill entry points have UI metadata. The directory `Cyclaw-Sandbox`
+All 22 skill entry points have UI metadata. The directory `Cyclaw-Sandbox`
 keeps its historical spelling; its skill/invocation name is `cyclaw-sandbox`.
 The optimization skill consistently uses `cyclaw-optimize`. Preserve existing
 invocation policy when updating metadata.

@@ -113,6 +113,7 @@ Each skill lives at `.codex/skills/<directory>/SKILL.md` and has
 
 | Skill/directory | Use |
 |---|---|
+| `chris-codex` | Engineering continuity on non-Astra/unknown models; explicit use on any model |
 | `fable-protocol` | Evidence, scope, uncertainty, and verification discipline |
 | `cyclaw-project-guidance` | Load current architecture, rules, and task sources |
 | `cyclaw-advisor` | Read-only architecture, operations, or PR advice |
