@@ -283,7 +283,7 @@ README's "API Key Setup" section, before enabling it.
 | POST | `/api/soul` | Toggle that flag |
 | POST | `/api/model` | Select local model |
 | POST | `/api/chat` | Chat turn (`loop: true` for `/loop`; 409 `CHAT_BUSY` if a generation is already running) |
-| POST | `/api/chat/cancel` | Abort the in-flight Ollama POST (`/loop stop`) |
+| POST | `/api/chat/cancel` | Abort the in-flight Ollama POST and release the generation gate (`/loop stop`; console also sends this on reload) |
 | GET | `/api/github/status` | `gh` / agentic status via ops runner |
 | GET | `/api/agent/checks` | Named check profiles |
 | POST | `/api/agent/run` | Start a real-repo run; `409 AGENT_RUN_BUSY` if another run is already in progress, and again if it shares the local-model backend with an in-flight `/api/chat` turn |

@@ -15,6 +15,8 @@ rather than quietly sending prompts to a remote host.
 from __future__ import annotations
 
 import logging
+import socket
+from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -45,6 +47,31 @@ class ChatResult:
     model: str
     prompt_tokens: int
     completion_tokens: int
+
+
+def _shutdown_inflight_sockets(client: httpx.Client) -> None:
+    """Force-close TCP sockets of any in-flight request on ``client``.
+
+    ``httpx.Client.close()`` does not abort an active POST (httpx 0.28.1 /
+    httpcore). Without this, ``/api/chat/cancel`` reports cancelled while
+    ``GenerationGate`` stays held until the read timeout
+    (``models.local_llm.timeout_sec``, shipped 720s).
+    """
+    transport = getattr(client, "_transport", None)
+    pool = getattr(transport, "_pool", None)
+    connections = getattr(pool, "connections", None)
+    if not connections:
+        return
+    for conn in list(connections):
+        inner = getattr(conn, "_connection", None)
+        stream = getattr(inner, "_network_stream", None)
+        sock = getattr(stream, "_sock", None)
+        if sock is None:
+            continue
+        with suppress(OSError):
+            sock.shutdown(socket.SHUT_RDWR)
+        with suppress(OSError):
+            sock.close()
 
 
 def _is_loopback(url: str) -> bool:
@@ -126,13 +153,14 @@ class HarnessChatClient:
         self._client.close()
 
     def abort_in_flight(self) -> None:
-        """Close the current HTTP client (drops an in-flight POST) and open a fresh one.
+        """Abort an in-flight Ollama POST and open a fresh client.
 
-        /loop stop on a local 27b would otherwise wait for the current
-        completion (minutes) before Metal is free. Recreate rather than
-        reuse: httpx.Client.close() is terminal.
+        ``Client.close()`` is terminal and does not interrupt a blocked
+        POST, so the live sockets are shut down first. Recreate rather
+        than reuse the closed client.
         """
         old = self._client
+        _shutdown_inflight_sockets(old)
         self._client = httpx.Client(
             timeout=self._timeout_sec,
             transport=self._transport,

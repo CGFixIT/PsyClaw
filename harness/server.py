@@ -1386,6 +1386,13 @@ def create_app(
                 AgenticError(
                     "a local model turn is already running",
                     code="CHAT_BUSY",
+                    details={
+                        "session_id": session.session_id,
+                        "cancel": "/api/chat/cancel",
+                        "timeout_sec": int(
+                            getattr(client, "_timeout_sec", DEFAULT_CHAT_TIMEOUT_SEC)
+                        ),
+                    },
                 ),
             )
         try:
@@ -1428,9 +1435,9 @@ def create_app(
     def cancel_chat() -> dict:
         """Drop the in-flight Ollama POST so /loop stop frees Metal.
 
-        Closing the shared httpx client aborts the blocked socket; chat()
-        then raises HarnessLLMError and the generation gate releases in
-        finally. Idempotent when nothing is running.
+        abort_in_flight shuts down the blocked socket (close() alone does
+        not); chat() then raises HarnessLLMError and the generation gate
+        releases in finally. Idempotent when nothing is running.
         """
         abort = getattr(client, "abort_in_flight", None)
         if callable(abort):
