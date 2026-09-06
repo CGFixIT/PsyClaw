@@ -762,6 +762,8 @@ free_loopback_port() {
   fi
   if ! command -v lsof >/dev/null 2>&1; then
     warn "lsof not found; cannot free listeners on :$port"
+    # Unverified: do not let _restart_servers print "ports freed".
+    _LOOPBACK_PORT_HELD=1
     return 0
   fi
   # Any bind on this TCP port blocks a later 127.0.0.1 bind (wildcard included).
