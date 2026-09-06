@@ -26,6 +26,7 @@ def _valid_retrieval() -> dict:
             "top_k_keyword": 5,
             "rrf_k": 60,
             "min_score": 0.028,
+            "min_semantic_score": 0.30,
         }
     }
 
@@ -45,6 +46,20 @@ def test_min_score_zero_and_one_are_inclusive():
 def test_min_score_out_of_range_or_wrong_type_rejected(bad):
     cfg = _valid_retrieval()
     cfg["retrieval"]["min_score"] = bad
+    with pytest.raises(ConfigError):
+        validate_retrieval_config(cfg)
+
+
+def test_min_semantic_score_absent_is_allowed():
+    cfg = _valid_retrieval()
+    del cfg["retrieval"]["min_semantic_score"]
+    validate_retrieval_config(cfg)
+
+
+@pytest.mark.parametrize("bad", [1.5, -0.1, "0.3", True])
+def test_min_semantic_score_out_of_range_or_wrong_type_rejected(bad):
+    cfg = _valid_retrieval()
+    cfg["retrieval"]["min_semantic_score"] = bad
     with pytest.raises(ConfigError):
         validate_retrieval_config(cfg)
 

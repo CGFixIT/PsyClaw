@@ -139,15 +139,18 @@ retrieval:
   # the query at max_input_chars); disabling it lets a huge query exceed the budget.
   max_context_tokens: 8000
 
-  # min_score: routing threshold used by route_by_score_node (graph.py).
-  # Scores are RRF-fused ranks in [0, 1]; 0.028 is intentionally permissive —
-  # the design goal is "answer locally whenever any document is retrieved"
-  # and only route to user_gate when retrieval nearly completely fails.
-  # RRF scores rarely exceed 0.1 (rank-based, not similarity-based), so
-  # 0.028 ≈ "top result is in the top 3–4 ranked docs". To make the gate
-  # stricter (e.g. require strong semantic alignment), raise toward 0.05–0.08.
-
+  # min_score: RRF fused-rank threshold used by route_by_score_node (graph.py).
+  # Dual rank-0 with rrf_k=60 is 2/61 ≈ 0.0328 — that is the hybrid ceiling.
+  # 0.028 lets a dual rank-0 hit through and treats single-leg rank-0
+  # (1/61 ≈ 0.0164) as a miss. Do not raise this above ~0.033: every hybrid
+  # query would then confirm. Rank agreement is not topical confidence.
   min_score: 0.028
+  # min_semantic_score: cosine (1 - distance) floor on the top hit when
+  # retrieve stored a semantic_score (hybrid or semantic-only). Keyword-only
+  # hits have semantic_score null and stay on min_score alone. 0.30 sits
+  # between a tracked-corpus off-doctrine miss (~0.277) and the weakest
+  # ci_rag_smoke hit (~0.333). Absent key is treated as 0.0 at route time.
+  min_semantic_score: 0.30
   hybrid:
     enabled: true
 

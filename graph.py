@@ -313,18 +313,30 @@ def retrieve_node(state: GraphState, retriever: HybridRetriever, cfg: dict) -> d
 
 def route_by_score_node(state: GraphState, cfg: dict) -> dict:
     """Node 2: Compare top_score to threshold. Sets routing flag."""
-    # min_score is on the RRF scale, NOT cosine similarity — fused scores rarely
-    # exceed ~0.1, and the shipped config value is 0.028. The 0.4 fallback only
-    # fires when the key is missing from config entirely; on the RRF scale it is
-    # effectively unreachable, so a misconfigured deploy routes every query to
-    # the user gate instead of answering on a garbage threshold.
-    threshold = cfg.get("retrieval", {}).get("min_score", 0.4)
+    # min_score is on the RRF scale, NOT cosine similarity. Dual rank-0 with
+    # rrf_k=60 is 2/61 ≈ 0.0328, the hybrid ceiling, not a weak hit.
+    # Raising min_score above ~0.033 makes every hybrid query a vault miss.
+    # The 0.4 fallback only fires when the key is missing from config entirely;
+    # on the RRF scale it is effectively unreachable, so a misconfigured deploy
+    # routes every query to the user gate instead of answering on a garbage
+    # threshold.
+    retrieval = cfg.get("retrieval", {})
+    threshold = retrieval.get("min_score", 0.4)
     top_score = state.get("top_score", 0.0)
-
-    if top_score >= threshold:
-        return {"needs_user_confirm": False}
-    else:
+    if top_score < threshold:
         return {"needs_user_confirm": True}
+
+    # RRF says two lists agreed on rank. It does not say the chunk is on-topic.
+    # When retrieve already stored a cosine (hybrid or semantic-only), require
+    # that too. Absent key → 0.0 so partial test configs keep RRF-only behavior.
+    # Keyword-only hits have semantic_score None; they stay on the RRF gate.
+    sem_floor = retrieval.get("min_semantic_score", 0.0)
+    docs = state.get("retrieved_docs") or []
+    if docs:
+        sem = docs[0].get("semantic_score")
+        if isinstance(sem, (int, float)) and not isinstance(sem, bool) and sem < sem_floor:
+            return {"needs_user_confirm": True}
+    return {"needs_user_confirm": False}
 
 def guardrail_input_node(
     state: GraphState, *, input_guard: Callable[[str], dict[str, Any]] | None

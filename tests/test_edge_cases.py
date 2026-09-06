@@ -102,6 +102,45 @@ class TestScoreRouterBoundary:
         result = route_by_score_node({"query": "test"}, cfg=cfg)
         assert result["needs_user_confirm"] is True
 
+    def test_dual_rrf_weak_cosine_confirms(self):
+        from graph import route_by_score_node
+        cfg = {"retrieval": {"min_score": 0.028, "min_semantic_score": 0.30}}
+        result = route_by_score_node(
+            {
+                "query": "test",
+                "top_score": 0.0333,
+                "retrieved_docs": [{"score": 0.0333, "semantic_score": 0.27, "mode": "hybrid"}],
+            },
+            cfg=cfg,
+        )
+        assert result["needs_user_confirm"] is True
+
+    def test_dual_rrf_strong_cosine_stays_local(self):
+        from graph import route_by_score_node
+        cfg = {"retrieval": {"min_score": 0.028, "min_semantic_score": 0.30}}
+        result = route_by_score_node(
+            {
+                "query": "test",
+                "top_score": 0.0333,
+                "retrieved_docs": [{"score": 0.0333, "semantic_score": 0.53, "mode": "hybrid"}],
+            },
+            cfg=cfg,
+        )
+        assert result["needs_user_confirm"] is False
+
+    def test_keyword_only_ignores_semantic_floor(self):
+        from graph import route_by_score_node
+        cfg = {"retrieval": {"min_score": 0.028, "min_semantic_score": 0.30}}
+        result = route_by_score_node(
+            {
+                "query": "test",
+                "top_score": 0.0333,
+                "retrieved_docs": [{"score": 0.0333, "semantic_score": None, "mode": "keyword"}],
+            },
+            cfg=cfg,
+        )
+        assert result["needs_user_confirm"] is False
+
 
 class TestUserGateRouter:
     """user_gate_router routing logic edge cases."""
