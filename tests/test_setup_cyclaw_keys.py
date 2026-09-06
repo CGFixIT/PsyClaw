@@ -41,6 +41,54 @@ def _unused_listen_port() -> int:
     sock.close()
     return port
 
+
+# Tools --skip-prompts --restart-servers may need. lsof is deliberately omitted
+# so command -v lsof fails while openssl/id/kill stay resolvable.
+_PATH_WITHOUT_LSOF_TOOLS = (
+    "bash",
+    "sh",
+    "openssl",
+    "id",
+    "uname",
+    "mkdir",
+    "chmod",
+    "mktemp",
+    "mv",
+    "rm",
+    "cp",
+    "kill",
+    "sleep",
+    "cat",
+    "sed",
+    "tr",
+    "dirname",
+    "basename",
+    "touch",
+    "true",
+    "false",
+    "env",
+    "head",
+    "cut",
+    "grep",
+    "awk",
+    "date",
+    "launchctl",
+)
+
+
+def _path_without_lsof(extra_bin: Path, scratch: Path) -> str:
+    shadow = scratch / "no_lsof_bin"
+    shadow.mkdir(parents=True)
+    for name in _PATH_WITHOUT_LSOF_TOOLS:
+        found = shutil.which(name)
+        if found is None:
+            continue
+        dest = shadow / name
+        if dest.exists():
+            continue
+        dest.symlink_to(found)
+    return f"{extra_bin}{os.pathsep}{shadow}"
+
 _FAKE_SECURITY = """#!/usr/bin/env bash
 set -euo pipefail
 cmd="$1"; shift
@@ -415,6 +463,37 @@ def test_restart_servers_flag_is_port_scoped_not_pkill() -> None:
     assert "pkill" not in source
     assert "still has a TCP LISTEN after signaling" in source
     assert "sleep 0.2" in source
+
+
+def test_missing_lsof_marks_port_unverified() -> None:
+    """No lsof means the port was not inspected — do not claim it is free."""
+    source = _SCRIPT.read_text(encoding="utf-8")
+    idx = source.index("lsof not found; cannot free listeners")
+    window = source[idx : idx + 280]
+    assert "_LOOPBACK_PORT_HELD=1" in window
+
+
+def test_restart_servers_without_lsof_does_not_claim_ports_freed(
+    fake_security: Path, tmp_path: Path
+) -> None:
+    gate = _unused_listen_port()
+    harness = _unused_listen_port()
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        "--restart-servers",
+        "--gate-port",
+        str(gate),
+        "--harness-port",
+        str(harness),
+        fake_security_bin=fake_security,
+        home=tmp_path,
+        extra_env={"PATH": _path_without_lsof(fake_security, tmp_path / "nopath")},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "lsof not found" in result.stderr
+    assert "ports freed" not in result.stdout
+    assert "may still be held" in result.stderr
 
 
 def test_restart_servers_runs_after_generate(fake_security: Path, tmp_path: Path) -> None:

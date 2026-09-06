@@ -91,6 +91,52 @@ def _unused_port() -> int:
     return port
 
 
+# Default uninstall's port helper may call these. lsof is omitted on purpose.
+_PATH_WITHOUT_LSOF_TOOLS = (
+    "bash",
+    "sh",
+    "id",
+    "uname",
+    "mkdir",
+    "chmod",
+    "mktemp",
+    "mv",
+    "rm",
+    "cp",
+    "kill",
+    "sleep",
+    "cat",
+    "sed",
+    "tr",
+    "dirname",
+    "basename",
+    "true",
+    "false",
+    "env",
+    "launchctl",
+    "python3",
+    "python",
+    "rmdir",
+    "ls",
+)
+
+
+def _path_without_lsof(extra_bin: Path | None, scratch: Path) -> str:
+    shadow = scratch / "no_lsof_bin"
+    shadow.mkdir(parents=True)
+    for name in _PATH_WITHOUT_LSOF_TOOLS:
+        found = shutil.which(name)
+        if found is None:
+            continue
+        dest = shadow / name
+        if dest.exists():
+            continue
+        dest.symlink_to(found)
+    if extra_bin is None:
+        return str(shadow)
+    return f"{extra_bin}{os.pathsep}{shadow}"
+
+
 @pytest.fixture
 def fake_security(tmp_path: Path) -> Path:
     bin_dir = tmp_path / "bin"
@@ -252,6 +298,31 @@ def test_remove_keychain_without_test_mode_skips_off_darwin(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr
     assert "Darwin-only" in result.stdout
+
+
+def test_missing_lsof_marks_port_unverified() -> None:
+    """No lsof means the port was not inspected — treat it as still held."""
+    source = _SCRIPT.read_text(encoding="utf-8")
+    idx = source.index("lsof not found; cannot free listeners")
+    window = source[idx : idx + 280]
+    assert "_LOOPBACK_PORT_HELD=1" in window
+
+
+def test_uninstall_without_lsof_warns_ports_may_still_be_held(tmp_path: Path) -> None:
+    gate = _unused_port()
+    harness = _unused_port()
+    result = _run(
+        home=tmp_path,
+        extra_env={
+            "CYCLAW_GATE_PORT": str(gate),
+            "CYCLAW_HARNESS_PORT": str(harness),
+            "PATH": _path_without_lsof(None, tmp_path / "nopath"),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert "lsof not found" in result.stderr
+    assert "may still be held" in result.stderr
+    assert "uninstall complete" in result.stdout
 
 
 def test_garbage_gate_port_does_not_abort_uninstall(tmp_path: Path) -> None:
