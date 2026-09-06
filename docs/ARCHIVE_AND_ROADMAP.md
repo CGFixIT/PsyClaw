@@ -585,28 +585,26 @@ affected test suite afterward and updating `pyproject.toml` +
 `constraints.txt` together (`environment.yml`/`requirements.txt` too, where
 the package appears there).
 
-**Verification note:** all 11 "Current pin" values below were checked
-directly against `pyproject.toml`, `constraints.txt`, and `environment.yml` on
-2026-08-01 and match the 2026-07-21 plan's recorded pins exactly (e.g.
-`ruff==0.15.20` at `pyproject.toml:52`, `constraints.txt:97`,
-`environment.yml:70`; `fastapi==0.138.0` at `pyproject.toml:11`,
-`constraints.txt:33`). No bump in this set has landed yet — every row's
-Status is **not yet done**.
+**Verification note:** re-checked directly against `pyproject.toml` and
+`constraints.txt` on 2026-09-06 — 7 of the 11 rows below have since been
+bumped to (or past) their recorded target pin (`ruff` went further, to
+0.16.1); `psycopg`/`pgvector`/`websockets` remain at their original pins and
+still need the Tier 2/3 review described below.
 
 ### Living checklist
 
 | Tier | Package | Current pin | Target pin | Status |
 |---|---|---|---|---|
-| 1 | `ruff` | 0.15.20 | 0.15.22 | not yet done |
-| 1 | `mypy` | 2.1.0 | 2.3.0 | not yet done |
-| 2 | `langgraph` | 1.2.6 | 1.2.9 | not yet done |
-| 2 | `langchain` | 1.3.11 | 1.3.14 | not yet done |
-| 2 | `langchain-openai` | 1.3.3 | 1.3.5 | not yet done |
+| 1 | `ruff` | 0.16.1 | 0.15.22 | done (shipped past target) |
+| 1 | `mypy` | 2.3.0 | 2.3.0 | done |
+| 2 | `langgraph` | 1.2.9 | 1.2.9 | done |
+| 2 | `langchain` | 1.3.14 | 1.3.14 | done |
+| 2 | `langchain-openai` | 1.3.5 | 1.3.5 | done |
 | 2 | `psycopg` (+ `psycopg-binary`, lock-step) | 3.2.13 | 3.3.4 | not yet done |
 | 2 | `pgvector` | 0.4.2 | 0.5.0 | not yet done |
-| 3 | `fastapi` | 0.138.0 | 0.139.2 | not yet done |
-| 3 | `uvicorn` | 0.49.0 | 0.51.0 | not yet done |
-| 3 | `langchain-core` | 1.4.8 | 1.5.0 | not yet done |
+| 3 | `fastapi` | 0.139.2 | 0.139.2 | done |
+| 3 | `uvicorn` | 0.51.0 | 0.51.0 | done |
+| 3 | `langchain-core` | 1.5.0 | 1.5.0 | done |
 | 3 | `websockets` | 15.0.1 | 16.1.1 (**major**) | not yet done — blocked on langgraph-sdk compat check |
 
 ### Tier rationale (preserved from the source plan)
