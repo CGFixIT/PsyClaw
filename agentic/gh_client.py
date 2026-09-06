@@ -343,9 +343,9 @@ def run_read(
 
     ``retries`` adds up to N extra attempts with exponential backoff (each sleep
     capped at ``_MAX_BACKOFF_SEC``), but ONLY on a transient failure: a timeout
-    (except for ``repo_clone``, whose partial ``dest`` makes a re-run fail
-    deterministically), or a non-zero exit whose stderr matches a
-    network/server pattern (see ``_is_transient_gh_error``). Deterministic
+    (for ``repo_clone`` the partially-populated ``dest`` is removed first, or
+    the re-run would fail deterministically), or a non-zero exit whose stderr
+    matches a network/server pattern (see ``_is_transient_gh_error``). Deterministic
     failures (404, bad flag, auth) are never retried -- they fail fast.
     ``retries=0`` (the default) is exactly the historical single-shot behaviour.
     ``timeout`` defaults to 30s for every op except ``repo_clone``, whose only
@@ -376,12 +376,16 @@ def run_read(
             )
         except subprocess.TimeoutExpired as exc:
             audit_log({"event": "agentic_read_timeout", "op": op, "repo": repo, "attempt": attempt})
-            # repo_clone is the one op with filesystem side effects: a killed
-            # clone leaves a non-empty dest, so re-running the identical argv
-            # fails deterministically ("destination path already exists").
-            # Fail fast with the honest timeout error instead of burning the
-            # retry budget on attempts that cannot succeed.
-            if attempt < attempts and op != "repo_clone":
+            if attempt < attempts:
+                # repo_clone is the one op with filesystem side effects: a killed
+                # clone leaves a non-empty dest, and git refuses to clone into
+                # one ("destination path already exists"), so re-running the
+                # identical argv would fail deterministically and burn the whole
+                # retry budget. Clear the partial dest first so the retry is a
+                # real attempt. dest is a path CyClaw itself computed under a
+                # fresh mkdtemp (see repo_workspace._clone), never operator input.
+                if op == "repo_clone" and dest:
+                    shutil.rmtree(dest, ignore_errors=True)
                 time.sleep(min(retry_backoff_sec * (2 ** (attempt - 1)), _MAX_BACKOFF_SEC))
                 continue
             raise AgenticError(

@@ -373,18 +373,33 @@ def test_run_read_repo_clone_retries_transient_then_succeeds():
     assert mrun.call_count == 2
 
 
-def test_run_read_repo_clone_does_not_retry_on_timeout():
-    # A killed clone leaves a non-empty dest, so a retry of the same argv fails
-    # deterministically -- the timeout must surface on the first attempt.
+def test_run_read_repo_clone_clears_partial_dest_before_timeout_retry():
+    # A killed clone leaves a non-empty dest and git refuses to clone into one,
+    # so the retry must remove the partial dest first -- otherwise every retry
+    # fails deterministically and gh_retries is wasted.
+    success = _completed(stdout="Cloning into 'repo'...\n", returncode=0)
     with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
          patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.shutil, "rmtree") as mrmtree, \
          patch.object(gh_client.subprocess, "run",
-                      side_effect=subprocess.TimeoutExpired(cmd="gh", timeout=1)) as mrun, \
-         patch.object(gh_client.time, "sleep") as msleep:
-        with pytest.raises(AgenticError, match="timed out"):
-            run_read("repo_clone", "owner/repo", dest="/tmp/x/repo", retries=2, retry_backoff_sec=0)
-    assert mrun.call_count == 1
-    assert msleep.call_count == 0
+                      side_effect=[subprocess.TimeoutExpired(cmd="gh", timeout=1), success]) as mrun, \
+         patch.object(gh_client.time, "sleep"):
+        out = run_read("repo_clone", "owner/repo", dest="/tmp/x/repo", retries=1, retry_backoff_sec=0)
+    assert out["dest"] == "/tmp/x/repo"
+    assert mrun.call_count == 2
+    mrmtree.assert_called_once_with("/tmp/x/repo", ignore_errors=True)
+
+
+def test_run_read_non_clone_timeout_retry_does_not_touch_filesystem():
+    success = _completed(stdout='{"number": 2}', returncode=0)
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.shutil, "rmtree") as mrmtree, \
+         patch.object(gh_client.subprocess, "run",
+                      side_effect=[subprocess.TimeoutExpired(cmd="gh", timeout=1), success]), \
+         patch.object(gh_client.time, "sleep"):
+        run_read("pr_view", "owner/repo", number=1, retries=1, retry_backoff_sec=0)
+    mrmtree.assert_not_called()
 
 
 def test_run_read_repo_clone_audits_dest():
