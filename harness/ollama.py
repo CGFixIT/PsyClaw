@@ -15,7 +15,9 @@ rather than quietly sending prompts to a remote host.
 from __future__ import annotations
 
 import logging
+import os
 import socket
+import struct
 from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -32,6 +34,10 @@ _ERROR_BODY_PREVIEW = 300
 # Keep missing-key/direct-construction behavior aligned with the shipped 27B
 # local-model budget. Explicit config values still override this fallback.
 DEFAULT_CHAT_TIMEOUT_SEC = 720.0
+# linger-on, timeout 0: abort() sends RST so a Darwin recv() in another
+# thread actually returns. shutdown()+close() alone left the hung POST
+# blocked on macos-latest CI (join(2) still alive).
+_LINGER_RST = struct.pack("ii", 1, 0)
 
 
 class HarnessLLMError(AgenticError):
@@ -55,11 +61,13 @@ def _shutdown_inflight_sockets(client: httpx.Client) -> None:
     ``httpx.Client.close()`` does not abort an active POST (httpx 0.28.1 /
     httpcore). Without this, ``/api/chat/cancel`` reports cancelled while
     ``GenerationGate`` stays held until the read timeout
-    (``models.local_llm.timeout_sec``, shipped 720s).
+    (``models.local_llm.timeout_sec``, shipped 720s). Darwin also ignores a
+    cross-thread ``shutdown()``+``close()`` on a blocked ``recv()``; an
+    ``SO_LINGER`` RST plus closing the fd is what unblocks macos-latest.
     """
     transport = getattr(client, "_transport", None)
     pool = getattr(transport, "_pool", None)
-    connections = getattr(pool, "connections", None)
+    connections = getattr(pool, "connections", None) or getattr(pool, "_connections", None)
     if not connections:
         return
     for conn in list(connections):
@@ -67,11 +75,32 @@ def _shutdown_inflight_sockets(client: httpx.Client) -> None:
         stream = getattr(inner, "_network_stream", None)
         sock = getattr(stream, "_sock", None)
         if sock is None:
+            extra = getattr(stream, "get_extra_info", None)
+            sock = extra("socket") if callable(extra) else None
+        if sock is None:
             continue
-        with suppress(OSError):
+        with suppress(OSError, AttributeError, TypeError):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, _LINGER_RST)
+        with suppress(OSError, AttributeError):
             sock.shutdown(socket.SHUT_RDWR)
-        with suppress(OSError):
+        # Yank the fd so Darwin's blocked recv() returns. detach() first so
+        # later sock.close() / GC cannot close a recycled fd.
+        fd = -1
+        with suppress(OSError, AttributeError):
+            fd = sock.fileno()
+        detach = getattr(sock, "detach", None)
+        if callable(detach):
+            with suppress(OSError, AttributeError):
+                detach()
+        if fd >= 0:
+            with suppress(OSError):
+                os.close(fd)
+        with suppress(OSError, AttributeError):
             sock.close()
+        closer = getattr(conn, "close", None)
+        if callable(closer):
+            with suppress(OSError, AttributeError, RuntimeError):
+                closer()
 
 
 def _is_loopback(url: str) -> bool:

@@ -1223,7 +1223,8 @@ def test_abort_in_flight_unblocks_hung_post():
         before = chat._client
         chat.abort_in_flight()
         assert chat._client is not before
-        worker.join(2)
+        # Darwin RST needs a beat; join(2) left the worker alive on macos-latest.
+        worker.join(5)
         assert not worker.is_alive()
         assert "err" in result
     finally:
@@ -1255,7 +1256,7 @@ def test_chat_cancel_releases_hung_generation_gate(cfg):
         assert busy.json()["detail"]["code"] == "CHAT_BUSY"
         cancel = client.post("/api/chat/cancel")
         assert cancel.status_code == 200
-        worker.join(2)
+        worker.join(5)
         assert not worker.is_alive()
         retry = client.post("/api/chat", json={"message": "after cancel", "session_id": sid})
         assert retry.status_code == 200
