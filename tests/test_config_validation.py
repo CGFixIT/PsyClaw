@@ -56,10 +56,18 @@ def test_min_semantic_score_absent_is_allowed():
     validate_retrieval_config(cfg)
 
 
-@pytest.mark.parametrize("bad", [1.5, -0.1, "0.3", True])
+@pytest.mark.parametrize("bad", [1.5, -0.1, "0.3", True, None])
 def test_min_semantic_score_out_of_range_or_wrong_type_rejected(bad):
     cfg = _valid_retrieval()
     cfg["retrieval"]["min_semantic_score"] = bad
+    with pytest.raises(ConfigError):
+        validate_retrieval_config(cfg)
+
+
+def test_yaml_null_min_semantic_score_rejected():
+    loaded = yaml.safe_load("min_semantic_score: null\n")
+    cfg = _valid_retrieval()
+    cfg["retrieval"]["min_semantic_score"] = loaded["min_semantic_score"]
     with pytest.raises(ConfigError):
         validate_retrieval_config(cfg)
 
