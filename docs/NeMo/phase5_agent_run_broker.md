@@ -8,8 +8,11 @@
 >
 > **What's left:**
 > - Nothing outstanding — fully implemented; see `harness/server.py:92,1368`
->   and `tests/test_tool_broker_adversarial.py`. This doc is now a historical
->   record and is a candidate for deletion.
+>   and `tests/test_tool_broker_adversarial.py`. This doc is a historical
+>   decision log. **KEEP** (re-verified 2026-09-06): its only inbound link is
+>   `docs/NeMo/README.md:132`, which intentionally indexes it under
+>   "Historical plans" with its siblings. It is the cheapest of that set to
+>   remove if the owner wants to — the one edit needed is dropping that row.
 
 **Status (2026-08-27):** **SHIPPED** on `main` as [#1163](https://github.com/cgfixit/CyClaw/pull/1163).
 This file is the decision log. Do not treat the body as a to-do.

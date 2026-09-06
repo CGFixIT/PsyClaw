@@ -10,8 +10,10 @@
 >
 > **What's left:**
 > - Nothing outstanding for 4a/4b — see `docs/NeMo/README.md`'s live matrix.
->   This file is a decision log; candidate for deletion once cross-references
->   to it are removed from `README.md`/`phase2_implementation_plan.md`.
+>   This file is a decision log. **KEEP; not a deletion candidate**
+>   (re-verified 2026-09-06): `phase4b_soul_leak.md:14` cites its Decision 2
+>   and the 2026-08-15 addendum as the deferral record, and `README.md`
+>   intentionally indexes it under "Historical plans".
 
 > **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
 > [`README.md`](./README.md). 4a and 4b are **shipped**. This body is a decision log.
