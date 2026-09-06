@@ -116,8 +116,9 @@ def test_prepare_repo_stops_after_required_setup_failure(tmp_path: Path, monkeyp
 
 def test_runner_ref_detaches_at_exact_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = _load_script("run_sandbox_test.py")
-    sha = "39cd7e5ad532bdd45960604b6e388f156e6dd49d"
-    args = SimpleNamespace(in_place=False, work_root=str(tmp_path), branch="main", ref=sha, repo_url="https://x")
+    # A PR ref rather than a hex SHA literal: devskim flags 40-hex strings as tokens.
+    ref = "refs/pull/123/head"
+    args = SimpleNamespace(in_place=False, work_root=str(tmp_path), branch="main", ref=ref, repo_url="https://x")
     seen: list[list[str]] = []
 
     def fake_run(name: str, cmd: list[str], *rest: object, **kwargs: object) -> object:
@@ -130,10 +131,10 @@ def test_runner_ref_detaches_at_exact_commit(tmp_path: Path, monkeypatch: pytest
     runner._clone_or_use_repo(args, results)
 
     assert "--branch" not in seen[0] and "--single-branch" not in seen[0]
-    assert seen[1] == ["git", "fetch", "origin", sha]
+    assert seen[1] == ["git", "fetch", "origin", ref]
     assert seen[2] == ["git", "checkout", "--detach", "FETCH_HEAD"]
     assert seen[3][:2] == ["git", "rev-parse"]
-    assert [r.name for r in results] == ["clone origin/main", f"fetch {sha}", "checkout ref (detached)", "resolved head"]
+    assert [r.name for r in results] == ["clone origin/main", f"fetch {ref}", "checkout ref (detached)", "resolved head"]
 
 
 def test_runner_without_ref_keeps_branch_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
