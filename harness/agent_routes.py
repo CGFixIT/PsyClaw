@@ -232,7 +232,7 @@ def register_agent_routes(
             # two are not contending for anything and must not block each
             # other -- see _agent_run_shares_chat_backend's docstring.
             shares_backend = hs._agent_run_shares_chat_backend()
-            if shares_backend and not generation_gate.claim():
+            if shares_backend and not generation_gate.claim("agent"):
                 raise hs._err(
                     hs._HTTP_CONFLICT,
                     AgenticError(

@@ -1125,7 +1125,7 @@ def test_loop_history_is_clipped_to_char_budget(cfg, monkeypatch):
 
 def test_chat_busy_includes_recovery_context(client):
     sid = client.post("/api/sessions", json={"title": "busy"}).json()["session_id"]
-    assert client.app.state.generation_gate.claim() is True
+    assert client.app.state.generation_gate.claim("chat") is True
     try:
         resp = client.post("/api/chat", json={"message": "hello", "session_id": sid})
         assert resp.status_code == 409
@@ -1134,6 +1134,20 @@ def test_chat_busy_includes_recovery_context(client):
         assert detail["details"]["session_id"] == sid
         assert detail["details"]["cancel"] == "/api/chat/cancel"
         assert int(detail["details"]["timeout_sec"]) > 0
+    finally:
+        client.app.state.generation_gate.release()
+
+
+def test_chat_busy_omits_cancel_when_holder_is_not_chat(client):
+    sid = client.post("/api/sessions", json={"title": "agent-busy"}).json()["session_id"]
+    assert client.app.state.generation_gate.claim("agent") is True
+    try:
+        resp = client.post("/api/chat", json={"message": "hello", "session_id": sid})
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["code"] == "CHAT_BUSY"
+        assert "cancel" not in detail["details"]
+        assert detail["details"]["session_id"] == sid
     finally:
         client.app.state.generation_gate.release()
 
