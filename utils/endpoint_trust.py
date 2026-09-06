@@ -23,6 +23,8 @@ def hostname_of(url: str) -> str:
     try:
         host = (urlparse(url).hostname or "").lower()
     except ValueError:
+        # Keep malformed URLs on the same typed failure path as denied hosts so
+        # graph callers can return an audited error instead of a parser traceback.
         raise EndpointTrustError("malformed endpoint URL") from None
     if host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
@@ -40,6 +42,8 @@ def assert_local_destination(base_url: str, trusted_hosts: object = ()) -> None:
     host = hostname_of(base_url)
     if host in _LOOPBACK:
         return
+    # Trust is an operator assertion that this host may receive local context;
+    # hostname matching neither pins DNS nor grants online-provider consent.
     # Reject malformed lists rather than accidentally using substring matching.
     if isinstance(trusted_hosts, (list, tuple)) and host and any(
         isinstance(item, str) and host == item.lower() for item in trusted_hosts
