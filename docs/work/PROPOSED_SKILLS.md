@@ -1,5 +1,11 @@
 # Proposed CyClaw-Tailored Skills & Loops
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** MOSTLY_COMPLETE. Verified via `ls .claude/skills/`: `invariant-guard`, `injection-redteam`, `index-doctor`, and `doc-sync` all exist with `SKILL.md` + `verify.sh`, confirming #1, #2, #4 (plus the bonus doc-sync) are implemented exactly as this doc's own status banner says. `cve-triage` (#3) and `release-cut` (#5) are still absent from `.claude/skills/` — neither has been built.
+>
+> **What's left:**
+> - Build `#3 cve-triage` — a skill encoding the CVE risk-acceptance pattern already used for chromadb's `CVE-2026-45829` (see `docs/THREAT_MODEL.md` and `pyproject.toml`/`.osv-scanner.toml` risk-acceptance entries).
+> - Build `#5 release-cut` — version bump + console-script sanity + install-gate + tag, per this doc's §5.
+
 Suggestions for `.claude/skills/` additions specific to CyClaw's three
 invariants — **RAG-first retrieval**, **LangGraph topology as security policy**,
 **offline-first** — rather than generic refactor loops. Ranked by leverage.

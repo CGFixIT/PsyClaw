@@ -1,5 +1,10 @@
 # Agentic layer — deferred work
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** COMPLETE for D1, the only entry. The doc's own header already says "landed 2026-08-02," and this is confirmed live: `.github/workflows/ci.yml` contains a `real-repo-run-smoke` job and `tests/test_agentic_real_repo_run_smoke.py` exists in the repo (`ls tests/`). PR #735 (the P0 timeout fixes / P2 code-shape scanner this doc's trigger condition names) is not re-verified here, but the job it gated is present and running in CI as described.
+>
+> **What's left:**
+> - Nothing outstanding for D1 — verified via `.github/workflows/ci.yml` and `tests/test_agentic_real_repo_run_smoke.py`. If no new deferred-work entries have been added since, this doc is a candidate for archival (keep the file only if new deferred items get appended to it going forward).
+
 Work that is designed, verified where possible, and deliberately **not** shipped
 yet. Each entry records what exists, why it is on hold, and the concrete trigger
 for picking it up — so a later session can resume it without re-deriving the

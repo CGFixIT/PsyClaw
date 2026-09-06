@@ -1,5 +1,10 @@
 # Deep Agent Harness Phases 6-9
 
+> **Status update — 2026-09-06 (docs review, Claude Code):** SUPERSEDED (by `agentic/real_repo_loop.py`, per this doc's own header). Verified: `agentic/deepagent_github/` (`builder.py`, `subagents.py`, `tools.py`, `permissions.py`, etc.) and `agentic/harness_optimizer/` both exist in full and match the phase-6-9 description; `agentic/real_repo_loop.py` exists as the live successor (CLAUDE.md's module table confirms it's "the first live caller of `agentic/executor`"). All flags remain disabled by default in `config.yaml` (`deepagent_github`/optimizer nesting under the disabled-by-default `agentic:` block). Code/tests are kept, unmodified, per the 2026-07-31 owner retirement decision.
+>
+> **What's left:**
+> - Nothing outstanding — this is an accurate, frozen historical record of a retired subsystem. No further Deep Agents work is planned; do not resume it. Candidate for archival alongside `GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (same retirement), not deletion, since both are cited by `CLAUDE.md`'s module table.
+
 Status: implemented as an experimental, out-of-band surface. All feature flags
 remain disabled in `config.yaml` by default.
 
