@@ -1005,11 +1005,6 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # answer_model is only empty on the genuine pause path, so both conditions
     # together are what actually distinguishes the two.
     if needs_confirm and not answer_model:
-        top_score = result.get("top_score", 0.0)
-        # validate_retrieval_config() ran at boot (above), so this key is
-        # guaranteed present and in [0, 1] — the old 0.4 fallback was
-        # unreachable dead code that contradicted the shipped 0.028 default.
-        threshold = cfg["retrieval"]["min_score"]
         # A retrieval failure (retrieve_node caught a RAGError and set
         # state["error"] with top_score=0.0) also lands here, but it is NOT a
         # vault miss — presenting it as one hides a broken index behind a
@@ -1028,8 +1023,11 @@ async def query_endpoint(request: Request, req: QueryRequest):
                 f"Retrieval failed ({retrieval_error}) — no vault results available. {choices}"
             )
         else:
+            # Scores stay in graph state / audit. The console renders only
+            # confirm_message, so default copy must not leak RRF jargon.
             confirm_message = (
-                f"Vault miss (best score: {top_score:.3f} < {threshold}). {choices}"
+                f"I couldn't find a confident match in your documents. "
+                f"Choose where to answer. {choices}"
             )
         return QueryResponse(
             answer="",
