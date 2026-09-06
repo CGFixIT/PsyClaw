@@ -48,6 +48,7 @@ ACCOUNT="$(id -un)"
 GATE_PORT="${CYCLAW_GATE_PORT:-8787}"
 HARNESS_PORT="${CYCLAW_HARNESS_PORT:-8790}"
 SECURITY_BIN=""
+_LOOPBACK_PORT_HELD=0
 
 # Documented Keychain services only — never a wildcard delete. Names match
 # setup-cyclaw-keys.sh's KC_* constants.
@@ -73,8 +74,10 @@ confirm_destructive() {
 # Fail-soft: signal TCP LISTEN pids on $1. Never abort the caller.
 # Port-scoped (not a process-name sweep of python). Duplicated in
 # setup-cyclaw-keys.sh.
+# kill(1) success only means the signal was sent. Poll LISTEN afterwards
+# (~3s, 0.2s steps) before treating the port as free.
 free_loopback_port() {
-  local port="$1" pids="" pid=""
+  local port="$1" pids="" pid="" i=0 still=""
   case "$port" in
     ''|*[!0-9]*)
       echo "[cyclaw] WARNING: refusing to free a non-numeric port ('$port')" >&2
@@ -104,13 +107,28 @@ free_loopback_port() {
     echo "[cyclaw] stopping listener pid $pid on :$port"
     kill "$pid" 2>/dev/null || echo "[cyclaw] WARNING: could not signal pid $pid on :$port" >&2
   done
+  i=0
+  while [ "$i" -lt 15 ]; do
+    still="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -z "$still" ]; then
+      return 0
+    fi
+    sleep 0.2
+    i=$((i + 1))
+  done
+  echo "[cyclaw] WARNING: :$port still has a TCP LISTEN after signaling (pids: $still)" >&2
+  _LOOPBACK_PORT_HELD=1
   return 0
 }
 
 free_cyclaw_loopback_ports() {
+  _LOOPBACK_PORT_HELD=0
   echo "[cyclaw] freeing loopback listeners on :$GATE_PORT / :$HARNESS_PORT (best-effort)..."
   free_loopback_port "$GATE_PORT"
   free_loopback_port "$HARNESS_PORT"
+  if [ "$_LOOPBACK_PORT_HELD" -eq 1 ]; then
+    echo "[cyclaw] WARNING: :$GATE_PORT / :$HARNESS_PORT may still be held; a later start can hit address-in-use" >&2
+  fi
 }
 
 remove_keychain_item() {

@@ -318,6 +318,8 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
     assert "delete-generic-password" in text
     assert "free_loopback_port" in text
     assert "pkill" not in text
+    assert "still has a TCP LISTEN after signaling" in text
+    assert "sleep 0.2" in text
     for service in (
         "com.cgfixit.cyclaw.api-key",
         "com.cgfixit.cyclaw.telegram-bot-token",

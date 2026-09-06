@@ -413,6 +413,8 @@ def test_restart_servers_flag_is_port_scoped_not_pkill() -> None:
     assert "--restart-servers" in source
     assert "free_loopback_port" in source
     assert "pkill" not in source
+    assert "still has a TCP LISTEN after signaling" in source
+    assert "sleep 0.2" in source
 
 
 def test_restart_servers_runs_after_generate(fake_security: Path, tmp_path: Path) -> None:
@@ -431,7 +433,7 @@ def test_restart_servers_runs_after_generate(fake_security: Path, tmp_path: Path
     )
     assert result.returncode == 0, result.stderr
     assert f"freeing loopback listeners on :{gate} / :{harness}" in result.stdout
-    assert "Start cyclaw in a new shell" in result.stdout
+    assert "ports freed. Start cyclaw in a new shell" in result.stdout
     assert "NOT applied live" in result.stdout
 
 
@@ -479,11 +481,69 @@ def test_restart_servers_stops_a_loopback_listener(fake_security: Path, tmp_path
         )
         assert result.returncode == 0, result.stderr
         assert f"stopping listener pid {listener.pid} on :{port}" in result.stdout
+        assert "ports freed. Start cyclaw in a new shell" in result.stdout
         listener.wait(timeout=5)
         assert listener.returncode is not None
     finally:
         if listener.poll() is None:
             listener.kill()
+            listener.wait(timeout=2)
+
+
+@pytest.mark.skipif(shutil.which("lsof") is None, reason="lsof required to free listeners")
+def test_restart_servers_warns_if_listener_ignores_term(
+    fake_security: Path, tmp_path: Path
+) -> None:
+    """kill(1) success is not a closed listen socket — report that honestly."""
+    port = _unused_listen_port()
+    listener = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal, socket, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+            f"s.bind(('127.0.0.1', {port}))\n"
+            "s.listen(1)\n"
+            "time.sleep(60)\n",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            check = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                if check.connect_ex(("127.0.0.1", port)) == 0:
+                    break
+            finally:
+                check.close()
+            time.sleep(0.05)
+        else:
+            listener.kill()
+            raise AssertionError("listener never bound")
+
+        result = _run(
+            "--skip-prompts",
+            "--no-print-key",
+            "--restart-servers",
+            "--gate-port",
+            str(port),
+            "--harness-port",
+            str(_unused_listen_port()),
+            fake_security_bin=fake_security,
+            home=tmp_path,
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"stopping listener pid {listener.pid} on :{port}" in result.stdout
+        assert "ports freed." not in result.stdout
+        assert "still has a TCP LISTEN after signaling" in result.stderr
+        assert "may still be held" in result.stderr
+    finally:
+        if listener.poll() is None:
+            listener.send_signal(signal.SIGKILL)
             listener.wait(timeout=2)
 
 

@@ -745,8 +745,11 @@ _copy_key() {
 # Port-scoped (not a process-name sweep of python). Duplicated in
 # uninstall-cyclaw.sh because this script is copied standalone to
 # ~/.CyClaw/bin/.
+# kill(1) success only means the signal was sent. Poll LISTEN afterwards
+# (~3s, 0.2s steps) before treating the port as free.
+_LOOPBACK_PORT_HELD=0
 free_loopback_port() {
-  local port="$1" pids="" pid=""
+  local port="$1" pids="" pid="" i=0 still=""
   case "$port" in
     ''|*[!0-9]*)
       warn "refusing to free a non-numeric port ('$port')"
@@ -776,6 +779,17 @@ free_loopback_port() {
     step "stopping listener pid $pid on :$port"
     kill "$pid" 2>/dev/null || warn "could not signal pid $pid on :$port"
   done
+  i=0
+  while [ "$i" -lt 15 ]; do
+    still="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -z "$still" ]; then
+      return 0
+    fi
+    sleep 0.2
+    i=$((i + 1))
+  done
+  warn ":$port still has a TCP LISTEN after signaling (pids: $still)"
+  _LOOPBACK_PORT_HELD=1
   return 0
 }
 
@@ -792,11 +806,16 @@ _bootout_server_agents() {
 }
 
 _restart_servers() {
+  _LOOPBACK_PORT_HELD=0
   step "freeing loopback listeners on :$GATE_PORT / :$HARNESS_PORT (best-effort)..."
   _bootout_server_agents
   free_loopback_port "$GATE_PORT"
   free_loopback_port "$HARNESS_PORT"
-  step "ports freed. Start cyclaw in a new shell to load the new CYCLAW_API_KEY"
+  if [ "$_LOOPBACK_PORT_HELD" -eq 0 ]; then
+    step "ports freed. Start cyclaw in a new shell to load the new CYCLAW_API_KEY"
+  else
+    warn ":$GATE_PORT / :$HARNESS_PORT may still be held; start cyclaw in a new shell only after those listeners exit"
+  fi
   step "browser still holds the old #apiKey until you paste or re-run --fill-browser"
 }
 
