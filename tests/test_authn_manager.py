@@ -790,11 +790,14 @@ class TestSessions:
         fast_manager.create_user("alice", _GOOD_PASSWORD)
         result = fast_manager.login("alice", _GOOD_PASSWORD)
         real_now = fast_manager._now
-        # Touch at t+3 (inside the 5s idle window) -- resets last_seen_ts to t+3.
-        fast_manager._now = lambda: real_now() + 3
+        t0 = real_now()
+        # Touch at t0+3 (inside the 5s idle window) -- resets last_seen_ts.
+        # Freeze against t0, not live time.time(): wall-clock between login
+        # and validate would otherwise eat the 5s idle window on a slow runner.
+        fast_manager._now = lambda: t0 + 3
         assert fast_manager.validate_session(result.session_id) is not None
-        # Now at t+7: 4s since the touch at t+3, still inside 5s -> still valid.
-        fast_manager._now = lambda: real_now() + 7
+        # Now at t0+7: 4s since the touch at t0+3, still inside 5s -> still valid.
+        fast_manager._now = lambda: t0 + 7
         try:
             assert fast_manager.validate_session(result.session_id) is not None
         finally:

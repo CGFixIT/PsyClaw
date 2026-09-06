@@ -166,6 +166,7 @@ jobs:
           --cov=harness \
           --cov=telegram \
           --cov=opentweet \
+          --cov=schemas \
           --cov-report=xml \
           --cov-report=term-missing \
           --tb=short
