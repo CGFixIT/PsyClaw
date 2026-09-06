@@ -45,6 +45,8 @@ def _unused_listen_port() -> int:
 # Tools --skip-prompts --restart-servers may need. lsof is deliberately omitted
 # so command -v lsof fails while openssl/id/kill stay resolvable.
 _PATH_WITHOUT_LSOF_TOOLS = (
+    "bash",
+    "sh",
     "openssl",
     "id",
     "uname",
@@ -76,7 +78,7 @@ _PATH_WITHOUT_LSOF_TOOLS = (
 
 def _path_without_lsof(extra_bin: Path, scratch: Path) -> str:
     shadow = scratch / "no_lsof_bin"
-    shadow.mkdir()
+    shadow.mkdir(parents=True)
     for name in _PATH_WITHOUT_LSOF_TOOLS:
         found = shutil.which(name)
         if found is None:

@@ -93,6 +93,8 @@ def _unused_port() -> int:
 
 # Default uninstall's port helper may call these. lsof is omitted on purpose.
 _PATH_WITHOUT_LSOF_TOOLS = (
+    "bash",
+    "sh",
     "id",
     "uname",
     "mkdir",
@@ -121,7 +123,7 @@ _PATH_WITHOUT_LSOF_TOOLS = (
 
 def _path_without_lsof(extra_bin: Path | None, scratch: Path) -> str:
     shadow = scratch / "no_lsof_bin"
-    shadow.mkdir()
+    shadow.mkdir(parents=True)
     for name in _PATH_WITHOUT_LSOF_TOOLS:
         found = shutil.which(name)
         if found is None:
