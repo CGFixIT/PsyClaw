@@ -54,11 +54,12 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
         ▼
    graph.py  (LangGraph 12-node state machine)
    retrieve → route_by_score
-              ├─ score ≥ min_score → guardrail_input (offline input rail; opt-in,
+              ├─ RRF ≥ min_score AND (no cosine or cosine ≥ min_semantic_score)
+              │                       → guardrail_input (offline input rail; opt-in,
               │                       pass-through when guardrails.enabled=false)
               │                       ├─ blocked → audit_logger
               │                       └─ passed  → local_llm
-              └─ score < min_score → user_gate
+              └─ else → user_gate
                                      ├─ confirmed + hybrid + selected provider usable
                                      │    → pre_action_hook_<provider> → grok_fallback |
                                      │      claude_fallback (NOT railed — their gate is
@@ -239,7 +240,8 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | Value | Setting | Note |
 |---|---|---|
 | `127.0.0.1:8787` | `api.host`/`api.port` | loopback only, never a public interface |
-| `0.028` | `retrieval.min_score` | **RRF scale**, not cosine. Fused scores rarely exceed ~0.1 |
+| `0.028` | `retrieval.min_score` | **RRF scale**, not cosine. Dual rank-0 ceiling is `2/61 ≈ 0.0328` |
+| `0.30` | `retrieval.min_semantic_score` | Cosine floor on the top hit when `semantic_score` is present |
 | `60` | `retrieval.rrf_k` | RRF fusion constant |
 | `780` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (720) |
 | `720` / `4096` | `local_llm.timeout_sec` / `max_tokens` | sized for dense ~27B MLX on M5 Pro class 307 GB/s (48 GB unified) — match the shipped default. Decode tok/s is **not** a config value; measure with `scripts/measure_local_llm_throughput.py` |
@@ -420,10 +422,12 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   suppression needs a `--no_telemetry` private build — never claim it.
 
 ### Retrieval & config
-- **Trap:** "fixing" `min_score: 0.028` upward toward a cosine-like 0.5.
-  **Rule:** it is on the **RRF scale**; fused scores rarely exceed ~0.1. Raising
-  it routes every query to the user gate. Leave it unless retuning retrieval
-  deliberately.
+- **Trap:** "fixing" `min_score: 0.028` upward toward a cosine-like 0.5, or
+  above the hybrid ceiling ~0.033.
+  **Rule:** it is on the **RRF scale**. Dual rank-0 with `rrf_k=60` is
+  `2/61 ≈ 0.0328`. Raising `min_score` above that routes every hybrid query
+  to the user gate. Topical strictness is `min_semantic_score` (cosine), not
+  a higher RRF threshold.
 - **Trap:** unifying the test mock's `min_score` (0.75) with production (0.028).
   **Rule:** they are intentionally different and both load-bearing. The mock
   high/low scores straddle 0.75; production RRF scores straddle 0.028.

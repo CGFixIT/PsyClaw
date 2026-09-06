@@ -60,7 +60,9 @@ def main() -> int:
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     min_score = float(cfg["retrieval"]["min_score"])
+    min_semantic = float(cfg["retrieval"].get("min_semantic_score") or 0.0)
     print(f"Configured min_score gate: {min_score}")
+    print(f"Configured min_semantic_score gate: {min_semantic}")
 
     print("Building real index from", cfg["corpus"]["path"], "...")
     build_index()
@@ -80,10 +82,19 @@ def main() -> int:
         top = results[0]
         print(f"  Top source: {top.source}")
         print(f"  Top score:  {round(top.score, 6)} (gate: {min_score})")
+        print(f"  Semantic:   {top.semantic_score} (gate: {min_semantic})")
         print(f"  Mode:       {top.retrieval_mode}")
 
         if top.score < min_score:
             print(f"  FAIL: top score {top.score} below min_score gate {min_score} (vault miss)")
+            failures += 1
+            continue
+
+        if top.semantic_score is not None and top.semantic_score < min_semantic:
+            print(
+                f"  FAIL: semantic_score {top.semantic_score} below "
+                f"min_semantic_score {min_semantic}"
+            )
             failures += 1
             continue
 
