@@ -23,7 +23,8 @@ which starts both). Mutable state lives under `%USERPROFILE%\.CyClaw`.
 ## Scheduled tasks
 
 Dropbox sync is already scheduled with `python -m sync.cli schedule`
-(live `schtasks /Create`, daily only, task name `CyClaw Dropbox Sync`).
+(live `schtasks /Create`, daily by default -- `sync.schedule_frequency` also
+accepts `weekly` / `monthly`; task name `CyClaw Dropbox Sync`).
 
 `Uninstall-CyClaw.ps1` best-effort deletes a **fixed** list of CyClaw task
 names (`CyClaw Dropbox Sync`, `CyClaw fsconnect-trash`,

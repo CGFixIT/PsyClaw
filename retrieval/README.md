@@ -25,7 +25,10 @@ precedes it.
 - `indexing.chunk_overlap` must stay `< chunk_size`.
 - The BM25 store is **JSON** (`index/bm25.json`), never pickle — pickle is an
   RCE vector and `test_security` guards the format.
-- All values live in `config.yaml`; nothing here hardcodes a tunable.
+- All values live in `config.yaml`, with one deliberate exception: the
+  query-embedding LRU cache size is fixed at import time by `functools.lru_cache`
+  (default `2048` in `embeddings.py`), so it is overridable only via the
+  `CYCLAW_EMBED_CACHE_SIZE` env var, not `config.yaml`.
 
 ## Related
 

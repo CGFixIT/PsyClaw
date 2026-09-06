@@ -9,7 +9,7 @@ grepping.
 
 | Document | Owns |
 |---|---|
-| `THREAT_MODEL.md` | Security scope: single-operator, loopback-bound, single-tenant — plus every amendment (executor, telegram, armed external providers). Read before any security-touching change. |
+| `THREAT_MODEL.md` | Security scope: trusted-operator (single by default, a small trusted set behind `auth.enabled`), loopback-bound, single-tenant — plus every amendment (executor, telegram, armed external providers). Read before any security-touching change. |
 | `../CLAUDE.md` / `../AGENTS.md` | Operating contract for agents (invariants, traps, commands). |
 | `../INVARIANTS.md` (repo root) | Which guarantee is enforced by code vs. convention, and the test pinning each. |
 | `changelog.txt` | Change history over time. |

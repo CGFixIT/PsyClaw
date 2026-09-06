@@ -29,9 +29,11 @@ and/or Claude, selected per-query via `online_provider`). It binds
 1. **Code** — the running behavior. When docs and code disagree, code wins.
 2. **`config.yaml`** — the single source of truth for every tunable. No
    hardcoded tunables anywhere else.
-3. **`docs/THREAT_MODEL.md`** — the security scope: single-operator,
-   loopback-bound, single-tenant. Not multi-tenant, not a sandbox for untrusted
-   code. Read it before touching anything security-related.
+3. **`docs/THREAT_MODEL.md`** — the security scope: trusted-operator (one
+   by default, a small mutually trusted set behind `auth.enabled`),
+   loopback-bound, single-tenant. Multi-operator is not multi-tenant (fifteenth
+   amendment); not a sandbox for untrusted code. Read it before touching
+   anything security-related.
 4. This file and `.claude/rules/PROJECT_RULES.md` — the operating rules.
    `AGENTS.md` is the parallel guidance for other agents; keep them consistent.
 5. `README.md` for holistic view of codebase and purpose of application — `docs/changelog.txt` for reference of changes over time.

@@ -7,16 +7,16 @@ This package does not call GitHub, shell commands, or the CyClaw request path.
 ``GitHubCodingRunner`` (``runners/github_coding_runner.py``), the loop driver
 (``loop_driver.py``), and their supporting types are deliberately NOT
 re-exported here, even though every other public name in this package is.
-``github_coding_runner.py`` imports ``agentic.deepagent_github.builder``, and
-``agentic.deepagent_github.tools`` imports ``agentic.harness_optimizer.mcp.tools``
--- so the moment this ``__init__.py`` imports anything from
-``github_coding_runner``/``loop_driver`` at module scope, loading
-``agentic.deepagent_github`` (which many callers, including ``agentic.cli``,
-do routinely) forces this file to run, which in turn tries to finish loading
-``agentic.deepagent_github.builder`` before it has, a genuine circular import
-(confirmed by triggering it: ``ImportError: cannot import name
-'DeepAgentBuildResult' from partially initialized module``). Import both
-directly from their own modules instead --
+Historically ``github_coding_runner.py`` imported
+``agentic.deepagent_github.builder`` while ``agentic.deepagent_github.tools``
+imports ``agentic.harness_optimizer.mcp.tools``, so a module-scope import of
+either name here made loading ``agentic.deepagent_github`` (which
+``agentic.cli`` does routinely) a genuine circular import (confirmed at the
+time: ``ImportError: cannot import name 'DeepAgentBuildResult' from partially
+initialized module``). 92afb95 removed the runner's import edge into the
+retired builder, so the cycle no longer exists; the names stay off
+``__all__`` so their import path does not churn. Import both directly from
+their own modules instead --
 ``agentic.harness_optimizer.runners.github_coding_runner`` and
 ``agentic.harness_optimizer.loop_driver`` -- exactly how
 ``tests/test_agentic_harness_phase679.py`` already did before either of
