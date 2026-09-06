@@ -570,19 +570,19 @@ function describeHealth(data) {
 
   if (indexBuild.state === 'running') {
     return {
-      text: 'Building your library…', tone: 'warn', ollamaDown: false,
+      text: 'Building your library…', tone: 'warn', ollamaDown,
       detail: 'Reading your documents and making them searchable.'
     };
   }
   if (d.index_ready === false) {
     return {
-      text: 'No library yet', tone: 'warn', ollamaDown: false,
+      text: 'No library yet', tone: 'warn', ollamaDown,
       detail: 'CyClaw has no searchable copy of your documents yet. Build one below.'
     };
   }
   if (ollamaDown) {
     return {
-      text: "Local AI engine isn't running", tone: 'warn', ollamaDown: true,
+      text: "Local AI engine isn't running", tone: 'warn', ollamaDown,
       detail: 'Start Ollama (ollama serve) and CyClaw can write answers again. '
             + 'Your documents are still searchable in the meantime.'
     };

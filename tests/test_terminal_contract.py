@@ -658,6 +658,13 @@ def test_ollama_down_exposes_inline_how_to_start():
     assert "tone: 'warn'" in desc_body
     assert "tone: 'ok'" in desc_body
     assert "ollamaHelp.hidden = !ollamaDown" in js
+    # The chip ranks "No library yet" above the Ollama-down sentence, but the
+    # How to start control must still appear whenever the service is down.
+    ranked = desc_body.split("if (d.index_ready === false)", 1)
+    assert len(ranked) == 2, "index_ready ranking moved; update this test"
+    no_lib = ranked[1].split("if (ollamaDown)", 1)[0]
+    assert "ollamaDown," in no_lib or "ollamaDown:" in no_lib
+    assert "ollamaDown: false" not in no_lib
 
 
 def test_index_build_renders_elapsed_when_present():
