@@ -208,7 +208,9 @@ zsh; on macOS bash it preserves the first existing login file among
 `~/.CyClaw/repo` clone target before cloning; it is intentionally destructive
 and does not apply with `--repo-path`. Uninstall with
 `bash ./macos/uninstall-cyclaw.sh` (`--remove-home` also deletes `~/.CyClaw`,
-with a prompt).
+with a prompt; `--remove-keychain` is the opt-in purge of the five
+documented Keychain services — see
+[401 / key drift recovery](macos/README.md#401--key-drift-recovery)).
 
 **What it deliberately does NOT do** — verified against the script, which
 contains zero references to any of these. Option A is not a superset of
@@ -302,6 +304,11 @@ Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip any), and stores them in the
 macOS Keychain plus `~/.CyClaw/.env` (`chmod 600`). The rc file only *sources*
 that dotenv — it never inlines a secret. LaunchAgents still read Keychain via
 `cyclaw-keychain-env.sh`. Flags and service names: [`macos/README.md`](macos/README.md).
+A rotate does not change a running server; if harness/soul routes 401 after
+a key change, follow
+[401 / key drift recovery](macos/README.md#401--key-drift-recovery)
+(`--restart-servers`, new shell, `--fill-browser` / paste; `--remove-keychain`
+to delete leftover items).
 
 If you only need the keys in the current tab and do not want the bootstrap:
 

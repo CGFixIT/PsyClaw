@@ -17,9 +17,9 @@ Console package: [`harness/README.md`](../harness/README.md).
 | `setup-cyclaw.sh` | **The one-command onboarding entry point (#1053).** Wraps everything below into a single operator decision: clone (if no checkout is found), run `setup-from-clone.sh --no-start`, offer every remaining harness-managed credential (`harness/env_keys.py`'s advanced entries — cloud planner / DB URLs) beyond the primary ones `setup-cyclaw-keys.sh` already handles, then optionally start both servers, open the loopback consoles, and autofill the generated key into `#apiKeyInput` / `#apiKey` in browser memory only. Works standalone too — download just this file and it offers to clone. `--repo PATH`, `--clone-dir PATH`, `--start`/`--no-start`, `--browser`/`--no-browser`, `--autofill-api-key`/`--no-autofill-api-key`, `--skip-advanced-keys`, `--skip-prompts`, `--dry-run`; forwards its remaining flags (`--skip-install`, `--skip-keys`, `--small-model`, `--ollama-model TAG`, etc.) straight to `setup-from-clone.sh`. It does not reimplement installation or key persistence — every write still goes through the scripts below. Run it with `--help` for the authoritative flag list. |
 | `setup-from-clone.sh` | **One-shot after `git clone`** on Apple Silicon. Chains `install-cyclaw.sh` + `setup-cyclaw-keys.sh` (prompts for Telegram / Claude / Grok / GitHub), checks Ollama, builds the retrieval index, then starts both servers. `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`, `--ollama-model TAG`. Note `--skip-prompts` implies no server start; pass `--start` to launch anyway. The script accepts a wider flag set than the common ones listed here — including `--skip-install`, `--skip-python-deps`, `--skip-keys`, `--skip-ollama`, `--skip-index`, `--skip-advisor`, `--no-browser`, `--no-fsconnect`, `--no-profile-edit`, `--no-path-edit`, `--grok-dummy`, `--rotate-key`, `--ollama-install-script`, and `--yes`; run it with `--help` for the authoritative list. Called directly, it is the multi-question path `setup-cyclaw.sh` exists to front. |
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--replace-repo`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. `--replace-repo` is intentionally destructive only for an unusable directory at the default `~/.CyClaw/repo` clone target; it does not apply with `--repo-path`. |
-| `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate, opentweet, sync). |
+| `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Optional `--remove-keychain` (prompted y/N; Darwin-only) deletes the five documented `com.cgfixit.cyclaw.*` Keychain services for `id -un` — never a wildcard. `--yes` / `--assume-yes` confirms already-requested destructive flags only. Best-effort unschedules Dropbox sync, `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate, opentweet, sync), then frees leftover loopback listeners on `CYCLAW_GATE_PORT` / `CYCLAW_HARNESS_PORT` (defaults 8787 / 8790). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port` / `--repo` (point at a checkout other than the default). |
-| `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY`; prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain + `~/.CyClaw/.env` (chmod 600), failing before dotenv writes if a requested Keychain write fails. `--rotate`, `--no-env-file`, `--fill-browser` (loopback `#apiKey` / `#apiKeyInput` only — never localStorage), `--schedule-rotate monthly\|weekly\|never` (writes, never loads, a LaunchAgent), `--unschedule-rotate` (removes that LaunchAgent again). Further flags exist — `--no-keychain`, `--no-repo-env`, `--print-key`/`--no-print-key`, `--copy-key`/`--no-copy-key`, `--clipboard-ttl N`, `--open-consoles`, `--gate-port`, `--harness-port`, `--repo-path`, `--skip-prompts`, `--grok-dummy`; run it with `--help` for the authoritative list. |
+| `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY`; prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain + `~/.CyClaw/.env` (chmod 600), failing before dotenv writes if a requested Keychain write fails. `--rotate`, `--no-env-file`, `--fill-browser` (loopback `#apiKey` / `#apiKeyInput` only — never localStorage), `--schedule-rotate monthly\|weekly\|never` (writes, never loads, a LaunchAgent), `--unschedule-rotate` (removes that LaunchAgent again), `--restart-servers` (best-effort free the configured gate/harness loopback ports after a write; does not start the servers). Further flags exist — `--no-keychain`, `--no-repo-env`, `--print-key`/`--no-print-key`, `--copy-key`/`--no-copy-key`, `--clipboard-ttl N`, `--open-consoles`, `--gate-port`, `--harness-port`, `--repo-path`, `--skip-prompts`, `--grok-dummy`; run it with `--help` for the authoritative list. |
 | `setup-fsconnect.sh` | Creates confined `~/CyClaw-FS` (`chmod 700`). Unless `--prepare-only`, enables list/stat/read via `_enable_fsconnect_readlist.py`. |
 | `_enable_fsconnect_readlist.py` | Writes the confined read/list `fsconnect:` profile into `config.yaml` (writes stay off). |
 | `cyclaw-keychain-set.sh` | Interactive Keychain store. Bare `-w` (secret never in argv); `-T /usr/bin/security`. Requires a TTY. |
@@ -120,6 +120,40 @@ updating CyClaw so an existing schedule receives script fixes.
 
 Claude is `ANTHROPIC_API_KEY` because that is the only name `llm/client.py`
 reads.
+
+## 401 / key drift recovery
+
+Harness or soul routes return `401 bad_credentials` when Keychain,
+`~/.CyClaw/.env`, the live gate/harness process env, and the browser
+`#apiKey` / `#apiKeyInput` field disagree — typically after `--rotate`, a
+reinstall, or a leftover listener that still holds the old key. CyClaw never
+stores the operator key in `localStorage`.
+
+1. Stop stragglers on the configured loopback ports (defaults 8787 / 8790).
+   `uninstall-cyclaw.sh` does this best-effort before teardown. After a
+   rotate, `setup-cyclaw-keys.sh --restart-servers` frees the same ports
+   without starting the servers and without a process-name sweep.
+2. Open a **new** terminal tab so the `# >>> cyclaw keys >>>` rc block
+   re-sources `~/.CyClaw/.env`. Confirm the file is mode 600
+   (`stat -f %Lp ~/.CyClaw/.env` on macOS) and that
+   `echo ${CYCLAW_API_KEY:+set}` prints `set`.
+3. Start with `cyclaw`. The startup log must not warn that `CYCLAW_API_KEY`
+   is unset.
+4. Paste the current key into the console field, or
+   `bash ~/.CyClaw/bin/setup-cyclaw-keys.sh --skip-prompts --fill-browser`.
+
+To **purge** old Keychain items (the five services in the table above, this
+account only):
+
+```bash
+bash macos/uninstall-cyclaw.sh --remove-keychain          # prompts y/N
+bash macos/uninstall-cyclaw.sh --remove-keychain --yes    # non-interactive
+```
+
+`--remove-home` deletes `~/.CyClaw` (including `.env`) and still leaves
+Keychain items unless `--remove-keychain` is also passed. A later
+`setup-cyclaw-keys.sh` without `--rotate` will keep an existing Keychain
+`CYCLAW_API_KEY` rather than mint a replacement.
 
 ## `LaunchAgents/` — templates only
 

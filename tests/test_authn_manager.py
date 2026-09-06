@@ -788,17 +788,21 @@ class TestSessions:
         """The idle timeout is a ROLLING window: touching the session inside
         the window must push the deadline forward, not just check it once."""
         fast_manager.create_user("alice", _GOOD_PASSWORD)
-        result = fast_manager.login("alice", _GOOD_PASSWORD)
         real_now = fast_manager._now
         t0 = real_now()
+        # login() stamps last_seen_ts from _now() *before* scrypt. On a
+        # loaded Windows runner that hash can exceed 2s, so a post-login
+        # freeze still starts the 5s idle window already half-spent.
+        fast_manager._now = lambda: t0
+        result = fast_manager.login("alice", _GOOD_PASSWORD)
         # Touch at t0+3 (inside the 5s idle window) -- resets last_seen_ts.
         # Freeze against t0, not live time.time(): wall-clock between login
         # and validate would otherwise eat the 5s idle window on a slow runner.
         fast_manager._now = lambda: t0 + 3
-        assert fast_manager.validate_session(result.session_id) is not None
-        # Now at t0+7: 4s since the touch at t0+3, still inside 5s -> still valid.
-        fast_manager._now = lambda: t0 + 7
         try:
+            assert fast_manager.validate_session(result.session_id) is not None
+            # Now at t0+7: 4s since the touch at t0+3, still inside 5s -> still valid.
+            fast_manager._now = lambda: t0 + 7
             assert fast_manager.validate_session(result.session_id) is not None
         finally:
             fast_manager._now = real_now

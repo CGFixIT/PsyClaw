@@ -5,26 +5,175 @@
 # and setup-cyclaw-keys.sh's independent marker blocks in the shell rc file.
 # The home directory (sessions, venv, repo clone, .env) is KEPT by default
 # so no data is lost; pass --remove-home to delete it (prompts first).
+# Keychain items are KEPT by default; pass --remove-keychain to delete only
+# the five documented CyClaw services (Darwin / test-mode; prompts y/N).
 #
 # Usage:
-#   bash macos/uninstall-cyclaw.sh                # keep ~/.CyClaw data
-#   bash macos/uninstall-cyclaw.sh --remove-home  # also delete ~/.CyClaw
+#   bash macos/uninstall-cyclaw.sh                # keep ~/.CyClaw data + Keychain
+#   bash macos/uninstall-cyclaw.sh --remove-home  # also delete ~/.CyClaw (prompts)
 #   bash macos/uninstall-cyclaw.sh --remove-fsconnect  # prompt before deleting ~/CyClaw-FS
+#   bash macos/uninstall-cyclaw.sh --remove-keychain   # prompt before Keychain purge
+#   bash macos/uninstall-cyclaw.sh --remove-keychain --yes  # non-interactive Keychain purge
+#
+# --yes / --assume-yes confirms already-requested destructive flags only
+# (--remove-home, --remove-keychain, --remove-fsconnect). Default stays safe:
+# a missing TTY or empty answer is N. --yes alone deletes nothing extra.
+#
+# Before rc/home teardown this script best-effort frees loopback listeners on
+# CYCLAW_GATE_PORT / CYCLAW_HARNESS_PORT (defaults 8787 / 8790) after LaunchAgent
+# bootout, so a later reinstall is not talking to a stale gate/harness. Kill
+# failure never aborts uninstall. Duplicated in setup-cyclaw-keys.sh because
+# that script is copied standalone to ~/.CyClaw/bin/.
 
 set -euo pipefail
 
 REMOVE_HOME=0
 REMOVE_FSCONNECT=0
+REMOVE_KEYCHAIN=0
+ASSUME_YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --remove-home) REMOVE_HOME=1; shift ;;
     --remove-fsconnect) REMOVE_FSCONNECT=1; shift ;;
+    --remove-keychain) REMOVE_KEYCHAIN=1; shift ;;
+    --yes|--assume-yes) ASSUME_YES=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
 HOME_DIR="$HOME/.CyClaw"
 FSCONNECT_DIR="$HOME/CyClaw-FS"
+# Same account naming as setup-cyclaw-keys.sh / cyclaw-keychain-set.sh.
+ACCOUNT="$(id -un)"
+GATE_PORT="${CYCLAW_GATE_PORT:-8787}"
+HARNESS_PORT="${CYCLAW_HARNESS_PORT:-8790}"
+SECURITY_BIN=""
+_LOOPBACK_PORT_HELD=0
+
+# Documented Keychain services only — never a wildcard delete. Names match
+# setup-cyclaw-keys.sh's KC_* constants.
+KC_API="com.cgfixit.cyclaw.api-key"
+KC_TELEGRAM="com.cgfixit.cyclaw.telegram-bot-token"
+KC_GROK="com.cgfixit.cyclaw.grok-api-key"
+KC_ANTHROPIC="com.cgfixit.cyclaw.anthropic-api-key"
+KC_GH="com.cgfixit.cyclaw.gh-token"
+
+confirm_destructive() {
+  local prompt="$1" answer=""
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    return 0
+  fi
+  printf '%s (y/N) ' "$prompt"
+  read -r answer || true
+  case "$answer" in
+    y|Y) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Fail-soft: signal TCP LISTEN pids on $1. Never abort the caller.
+# Port-scoped (not a process-name sweep of python). Duplicated in
+# setup-cyclaw-keys.sh.
+# kill(1) success only means the signal was sent. Poll LISTEN afterwards
+# (~3s, 0.2s steps) before treating the port as free.
+free_loopback_port() {
+  local port="$1" pids="" pid="" i=0 still=""
+  case "$port" in
+    ''|*[!0-9]*)
+      echo "[cyclaw] WARNING: refusing to free a non-numeric port ('$port')" >&2
+      return 0
+      ;;
+  esac
+  if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    echo "[cyclaw] WARNING: port $port out of range; left listeners alone" >&2
+    return 0
+  fi
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo "[cyclaw] WARNING: lsof not found; cannot free listeners on :$port" >&2
+    return 0
+  fi
+  # Any bind on this TCP port blocks a later 127.0.0.1 bind (wildcard included).
+  pids="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+  for pid in $pids; do
+    case "$pid" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    if [ "$pid" = "$$" ] || [ "$pid" -eq 1 ]; then
+      continue
+    fi
+    echo "[cyclaw] stopping listener pid $pid on :$port"
+    kill "$pid" 2>/dev/null || echo "[cyclaw] WARNING: could not signal pid $pid on :$port" >&2
+  done
+  i=0
+  while [ "$i" -lt 15 ]; do
+    still="$(lsof -nP -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -z "$still" ]; then
+      return 0
+    fi
+    sleep 0.2
+    i=$((i + 1))
+  done
+  echo "[cyclaw] WARNING: :$port still has a TCP LISTEN after signaling (pids: $still)" >&2
+  _LOOPBACK_PORT_HELD=1
+  return 0
+}
+
+free_cyclaw_loopback_ports() {
+  _LOOPBACK_PORT_HELD=0
+  echo "[cyclaw] freeing loopback listeners on :$GATE_PORT / :$HARNESS_PORT (best-effort)..."
+  free_loopback_port "$GATE_PORT"
+  free_loopback_port "$HARNESS_PORT"
+  if [ "$_LOOPBACK_PORT_HELD" -eq 1 ]; then
+    echo "[cyclaw] WARNING: :$GATE_PORT / :$HARNESS_PORT may still be held; a later start can hit address-in-use" >&2
+  fi
+}
+
+remove_keychain_item() {
+  local service="$1" rc=0
+  # Never put a secret on argv. delete-generic-password takes account + service.
+  # Capture rc via `||` — `if ! cmd; then rc=$?` is 0 in bash (the if succeeded).
+  "$SECURITY_BIN" delete-generic-password -a "$ACCOUNT" -s "$service" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "[cyclaw] Keychain: deleted $service (account=$ACCOUNT)"
+    return 0
+  fi
+  # 44 = errSecItemNotFound — already gone is success.
+  if [ "$rc" -eq 44 ]; then
+    echo "[cyclaw] Keychain: $service already absent (account=$ACCOUNT)"
+    return 0
+  fi
+  echo "[cyclaw] WARNING: could not delete Keychain service=$service account=$ACCOUNT (security exit $rc)" >&2
+  return 0
+}
+
+purge_cyclaw_keychain() {
+  local uname_s
+  uname_s="$(uname -s 2>/dev/null || echo unknown)"
+  if [ "$uname_s" != "Darwin" ] && [ "${CYCLAW_UNINSTALL_TEST_MODE:-}" != "1" ]; then
+    echo "[cyclaw] --remove-keychain is Darwin-only (macOS Keychain); skipped"
+    return 0
+  fi
+  if [ "${CYCLAW_UNINSTALL_TEST_MODE:-}" = "1" ]; then
+    SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+  elif [ -x /usr/bin/security ]; then
+    SECURITY_BIN="/usr/bin/security"
+  else
+    SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+  fi
+  if [ -z "$SECURITY_BIN" ]; then
+    echo "[cyclaw] WARNING: security(1) not found; Keychain items were not removed" >&2
+    return 0
+  fi
+  echo "[cyclaw] removing documented CyClaw Keychain items for account=$ACCOUNT..."
+  remove_keychain_item "$KC_API"
+  remove_keychain_item "$KC_TELEGRAM"
+  remove_keychain_item "$KC_GROK"
+  remove_keychain_item "$KC_ANTHROPIC"
+  remove_keychain_item "$KC_GH"
+}
 
 # -- Sync scheduler cleanup ---------------------------------------------------
 # The Dropbox sync job (docs/SYNC_README.md) is tagged system-wide -- one
@@ -98,6 +247,9 @@ unschedule_landed_launchagents() {
   done
 }
 unschedule_landed_launchagents
+# After launchd bootout so a crash-only KeepAlive job is not immediately
+# respawned, then signal any leftover invoke-cyclaw / uvicorn listeners.
+free_cyclaw_loopback_ports
 
 PATH_START="# >>> cyclaw harness path >>>"
 PATH_END="# <<< cyclaw harness path <<<"
@@ -207,18 +359,27 @@ for RC_FILE in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.
 done
 
 if [ "$REMOVE_HOME" -eq 1 ] && [ -d "$HOME_DIR" ]; then
-  printf 'Delete %s including all sessions and the venv? (y/N) ' "$HOME_DIR"
-  answer=""
-  read -r answer || true
-  case "$answer" in
-    y|Y)
-      rm -rf "$HOME_DIR"
-      echo "[cyclaw] removed $HOME_DIR"
-      ;;
-    *)
-      echo "[cyclaw] kept $HOME_DIR"
-      ;;
-  esac
+  if confirm_destructive "Delete $HOME_DIR including all sessions and the venv?"; then
+    rm -rf "$HOME_DIR"
+    echo "[cyclaw] removed $HOME_DIR"
+  else
+    echo "[cyclaw] kept $HOME_DIR"
+  fi
+fi
+
+if [ "$REMOVE_HOME" -eq 1 ] && [ "$REMOVE_KEYCHAIN" -eq 0 ]; then
+  echo "[cyclaw] NOTE: Keychain items were not removed. A later reinstall can revive"
+  echo "[cyclaw]       old CYCLAW_API_KEY / provider tokens from services named"
+  echo "[cyclaw]       com.cgfixit.cyclaw.* (account=$ACCOUNT). Re-run with --remove-keychain"
+  echo "[cyclaw]       to delete the five documented items, or leave them if you still want them."
+fi
+
+if [ "$REMOVE_KEYCHAIN" -eq 1 ]; then
+  if confirm_destructive "Delete the five documented CyClaw Keychain items for $ACCOUNT?"; then
+    purge_cyclaw_keychain
+  else
+    echo "[cyclaw] kept Keychain items"
+  fi
 fi
 
 if [ "$REMOVE_FSCONNECT" -eq 1 ] && { [ -e "$FSCONNECT_DIR" ] || [ -L "$FSCONNECT_DIR" ]; }; then
@@ -226,18 +387,12 @@ if [ "$REMOVE_FSCONNECT" -eq 1 ] && { [ -e "$FSCONNECT_DIR" ] || [ -L "$FSCONNEC
     echo "[cyclaw] WARNING: refusing unexpected fsconnect target: $FSCONNECT_DIR" >&2
     exit 1
   fi
-  printf 'Delete %s and every file in the fsconnect jail? (y/N) ' "$FSCONNECT_DIR"
-  answer=""
-  read -r answer || true
-  case "$answer" in
-    y|Y)
-      rm -rf "$FSCONNECT_DIR"
-      echo "[cyclaw] removed $FSCONNECT_DIR (config remains fail-closed until setup is rerun)"
-      ;;
-    *)
-      echo "[cyclaw] kept $FSCONNECT_DIR"
-      ;;
-  esac
+  if confirm_destructive "Delete $FSCONNECT_DIR and every file in the fsconnect jail?"; then
+    rm -rf "$FSCONNECT_DIR"
+    echo "[cyclaw] removed $FSCONNECT_DIR (config remains fail-closed until setup is rerun)"
+  else
+    echo "[cyclaw] kept $FSCONNECT_DIR"
+  fi
 elif [ "$REMOVE_FSCONNECT" -eq 0 ] && [ -d "$FSCONNECT_DIR" ]; then
   echo "[cyclaw] kept $FSCONNECT_DIR (pass --remove-fsconnect to remove it)"
 fi
