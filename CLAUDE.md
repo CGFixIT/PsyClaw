@@ -839,23 +839,22 @@ skill, folded in since both need the same CyClaw-specific grounding).
 
 ### Cross-repo behavioral skill
 
-`/fable-protocol` — reasoning-discipline and epistemic-calibration layer (mark
-speculation, verify stale knowledge, security lens on every generated artifact,
-anti-sycophancy, Sonnet 5 vs Opus 5 routing). Scoped to the user, not to
-CyClaw: it is registered both at `.claude/skills/fable-protocol/SKILL.md` in
-this repo and at the user-level `~/.claude/skills/fable-protocol/SKILL.md`, so
-it activates in any repository, not only here. It does not encode CyClaw
-architecture and carries no authority over the six invariants in §3 — those
-still govern. See the skill file for the full protocol.
-
-`/fable-5.1-cc` — the companion **knowledge** layer to `/fable-protocol`'s
-discipline layer: Fable 5.1's handoff of what it knew about the owner as it
-relates to his coding projects (learning contract, the build-vs-ship pattern,
-portfolio, CyClaw facts to know cold, settled decisions, model routing, where a
-smaller model must compensate). Same dual registration
-(`.claude/skills/fable-5.1-cc/SKILL.md` + `~/.claude/skills/fable-5.1-cc/`);
-the repo copy redacts personal identity. Read at session start in any of his
-repos. Like `/fable-protocol`, it carries no authority over §3's invariants.
+`/fable-protocol` — reasoning-discipline, epistemic-calibration, AND
+knowledge-handoff layer (mark speculation, verify stale knowledge, security
+lens on every generated artifact, anti-sycophancy, Sonnet 5 vs Opus 5 routing,
+plus the owner's communication contract, project portfolio, CyClaw facts to
+know cold, settled decisions, and where a smaller model must compensate).
+Scoped to the user, not to CyClaw: it is registered both at
+`.claude/skills/fable-protocol/SKILL.md` in this repo and at the user-level
+`~/.claude/skills/fable-protocol/SKILL.md`, so it activates in any repository,
+not only here. Its later sections do document CyClaw architecture and settled
+decisions as a knowledge base, but carry no independent authority — `CLAUDE.md`
+and `config.yaml` remain the source of truth, and neither this skill's
+discipline layer nor its knowledge layer overrides the six invariants in §3.
+Read at session start in any of the owner's repos. See the skill file for the
+full protocol (consolidated 2026-09-06 from a separate `fable-5.1-cc`
+companion skill, which no longer exists as its own file — its content is now
+this skill's §8 onward).
 
 ---
 
