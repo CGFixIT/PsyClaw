@@ -41,8 +41,7 @@ def validate_retrieval_config(cfg: dict[str, Any]) -> None:
     Valid configs (the shipped defaults: ``min_score: 0.028``,
     ``min_semantic_score: 0.30``, ``top_k_*: 5``, ``rrf_k: 60``) pass unchanged
     -- this only rejects out-of-range typos. Absent ``min_semantic_score`` is
-    allowed so partial test configs keep RRF-only routing. A present null is
-    rejected at boot so ``route_by_score_node`` never compares a cosine to None.
+    allowed so partial test configs keep RRF-only routing.
     """
     retrieval = cfg.get("retrieval")
     if not isinstance(retrieval, dict):

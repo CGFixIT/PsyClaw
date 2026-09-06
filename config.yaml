@@ -149,8 +149,7 @@ retrieval:
   # retrieve stored a semantic_score (hybrid or semantic-only). Keyword-only
   # hits have semantic_score null and stay on min_score alone. 0.30 sits
   # between a tracked-corpus off-doctrine miss (~0.277) and the weakest
-  # ci_rag_smoke hit (~0.333). Absent key skips the cosine floor (RRF-only).
-  # A present null is rejected at boot.
+  # ci_rag_smoke hit (~0.333).
   min_semantic_score: 0.30
   hybrid:
     enabled: true

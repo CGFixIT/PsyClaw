@@ -327,11 +327,7 @@ def route_by_score_node(state: GraphState, cfg: dict) -> dict:
         return {"needs_user_confirm": True}
 
     # RRF says two lists agreed on rank. It does not say the chunk is on-topic.
-    # When retrieve stored a cosine AND a numeric min_semantic_score is set,
-    # require that too. Absent key or a non-number (including YAML null) skips
-    # this gate so RRF-only configs stay RRF-only, including hybrid hits with
-    # negative cosine. Keyword-only hits have semantic_score None; they stay
-    # on the RRF gate.
+    # Keyword-only hits have semantic_score None; they stay on the RRF gate.
     sem_floor = retrieval.get("min_semantic_score")
     docs = state.get("retrieved_docs") or []
     if (
